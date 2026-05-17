@@ -69,18 +69,22 @@ def get_cpu_per_core_usage():
 
 
 def _find_lhm_dll() -> str:
-    """Busca LibreHardwareMonitor.dll en assets/ relativo al proyecto."""
+    """Busca LibreHardwareMonitorLib.dll en assets/ relativo al proyecto."""
     import sys
+    # El archivo real dentro del zip de LHM se llama LibreHardwareMonitorLib.dll
+    dll_names = ["LibreHardwareMonitorLib.dll", "LibreHardwareMonitor.dll"]
     candidates = []
     if getattr(sys, "frozen", False):
         base = os.path.dirname(sys.executable)
-        candidates.append(os.path.join(base, "assets", "LibreHardwareMonitor.dll"))
-        candidates.append(os.path.join(base, "LibreHardwareMonitor.dll"))
+        for name in dll_names:
+            candidates.append(os.path.join(base, "assets", name))
+            candidates.append(os.path.join(base, name))
     else:
         here = os.path.dirname(os.path.abspath(__file__))
         root = os.path.dirname(here)
-        candidates.append(os.path.join(root, "assets", "LibreHardwareMonitor.dll"))
-        candidates.append(os.path.join(here, "LibreHardwareMonitor.dll"))
+        for name in dll_names:
+            candidates.append(os.path.join(root, "assets", name))
+            candidates.append(os.path.join(here, name))
     for path in candidates:
         if os.path.exists(path):
             return path

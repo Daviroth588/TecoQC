@@ -2,8 +2,10 @@ Para habilitar lectura de temperatura de CPU (igual que HWMonitor):
 
 1. Ir a: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases
 2. Descargar la ultima version (LibreHardwareMonitor-net472.zip o similar)
-3. Extraer el archivo
-4. Copiar "LibreHardwareMonitor.dll" a esta carpeta (assets/)
+3. Extraer el archivo ZIP
+4. Copiar "LibreHardwareMonitorLib.dll" a esta carpeta (assets/)
+   NOTA: el archivo se llama LibreHardwareMonitorLib.dll (no LibreHardwareMonitor.dll)
+         es el de ~348 KB dentro del ZIP extraido
 5. Ejecutar install.bat para instalar pythonnet:
       pip install pythonnet
 6. Ejecutar build.bat para compilar el ejecutable
