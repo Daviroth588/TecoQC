@@ -1,35 +1,35 @@
 """
-TecoQC - Tema visual profesional oscuro (Catppuccin Mocha inspired)
+TecoQC - Tema visual Azul/Verde (Tecology Blue-Green)
 """
 
 # ── Background layers ──────────────────────────────────────────────
-BG_BASE      = "#1e1e2e"   # main background
-BG_MANTLE    = "#181825"   # sidebar / deeper panels
-BG_CRUST     = "#11111b"   # deepest layer
-BG_SURFACE0  = "#313244"   # cards / raised surfaces
-BG_SURFACE1  = "#45475a"   # slightly elevated
-BG_SURFACE2  = "#585b70"   # even more elevated / borders
+BG_BASE      = "#0b1f2e"   # fondo principal — azul marino profundo
+BG_MANTLE    = "#081828"   # sidebar / paneles más oscuros
+BG_CRUST     = "#050f18"   # capa más profunda
+BG_SURFACE0  = "#112b3f"   # tarjetas / superficies elevadas
+BG_SURFACE1  = "#1a3a52"   # ligeramente elevado
+BG_SURFACE2  = "#255570"   # bordes / más elevado
 
 # ── Text ───────────────────────────────────────────────────────────
-TEXT_PRIMARY   = "#cdd6f4"
-TEXT_SECONDARY = "#a6adc8"
-TEXT_MUTED     = "#6c7086"
+TEXT_PRIMARY   = "#d0eeff"   # blanco azulado
+TEXT_SECONDARY = "#7ab8d4"   # azul medio
+TEXT_MUTED     = "#3d7a96"   # azul apagado
 
 # ── Accent colours ─────────────────────────────────────────────────
-ACCENT_BLUE    = "#89b4fa"
-ACCENT_LAVENDER= "#b4befe"
-SUCCESS        = "#a6e3a1"
-WARNING        = "#f9e2af"
-ERROR          = "#f38ba8"
-INFO           = "#89dceb"
-PEACH          = "#fab387"
+ACCENT_BLUE    = "#3fa9ff"   # azul vivo
+ACCENT_LAVENDER= "#5ccfff"   # cian claro
+SUCCESS        = "#27c97a"   # verde vivo
+WARNING        = "#f5c542"   # ámbar
+ERROR          = "#ff5c6b"   # rojo
+INFO           = "#00d4c8"   # verde-cian
+PEACH          = "#ff9f5c"   # naranja suave
 
 # ── Sidebar ────────────────────────────────────────────────────────
 SIDEBAR_BG         = BG_MANTLE
 SIDEBAR_HEADER_BG  = BG_CRUST
 SIDEBAR_ITEM_BG    = BG_MANTLE
 SIDEBAR_ITEM_HOVER = BG_SURFACE0
-SIDEBAR_CURRENT_BG = "#2a3f6f"   # blue tint
+SIDEBAR_CURRENT_BG = "#0d3a5c"   # azul seleccionado
 
 # ── Status colours ─────────────────────────────────────────────────
 STATUS_COLORS = {
@@ -57,15 +57,15 @@ FONT_SIDEBAR_H = (FONT_FAMILY, 12, "bold")
 # ── Button styles ──────────────────────────────────────────────────
 BTN_PRIMARY = {
     "bg": ACCENT_BLUE,
-    "fg": BG_BASE,
+    "fg": BG_CRUST,
     "font": FONT_BODY_BOLD,
     "relief": "flat",
     "cursor": "hand2",
     "padx": 18,
     "pady": 8,
     "bd": 0,
-    "activebackground": "#7aa2f7",
-    "activeforeground": BG_BASE,
+    "activebackground": "#2290e0",
+    "activeforeground": BG_CRUST,
 }
 
 BTN_SECONDARY = {
@@ -83,41 +83,41 @@ BTN_SECONDARY = {
 
 BTN_SUCCESS = {
     "bg": SUCCESS,
-    "fg": BG_BASE,
+    "fg": BG_CRUST,
     "font": FONT_BODY_BOLD,
     "relief": "flat",
     "cursor": "hand2",
     "padx": 18,
     "pady": 8,
     "bd": 0,
-    "activebackground": "#8ed380",
-    "activeforeground": BG_BASE,
+    "activebackground": "#1faa62",
+    "activeforeground": BG_CRUST,
 }
 
 BTN_DANGER = {
     "bg": ERROR,
-    "fg": BG_BASE,
+    "fg": BG_CRUST,
     "font": FONT_BODY_BOLD,
     "relief": "flat",
     "cursor": "hand2",
     "padx": 18,
     "pady": 8,
     "bd": 0,
-    "activebackground": "#e07a95",
-    "activeforeground": BG_BASE,
+    "activebackground": "#e04455",
+    "activeforeground": BG_CRUST,
 }
 
 BTN_WARNING = {
     "bg": WARNING,
-    "fg": BG_BASE,
+    "fg": BG_CRUST,
     "font": FONT_BODY_BOLD,
     "relief": "flat",
     "cursor": "hand2",
     "padx": 16,
     "pady": 8,
     "bd": 0,
-    "activebackground": "#e0cb8a",
-    "activeforeground": BG_BASE,
+    "activebackground": "#d4aa30",
+    "activeforeground": BG_CRUST,
 }
 
 BTN_NEUTRAL = {
