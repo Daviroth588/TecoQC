@@ -114,24 +114,69 @@ class Step(BaseStep):
         stress_inner.pack(fill=tk.X, padx=16, pady=10)
 
         tk.Label(stress_inner,
-                 text="La prueba de estrés carga todos los núcleos al 100% durante 10 segundos\n"
+                 text="Carga todos los núcleos al 100% durante el tiempo seleccionado "
                       "para verificar estabilidad y refrigeración bajo carga.",
                  bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_BODY, justify="left").pack(anchor="w", pady=(0, 10))
+                 font=theme.FONT_BODY, justify="left").pack(anchor="w", pady=(0, 8))
+
+        # Duration selector
+        dur_row = tk.Frame(stress_inner, bg=theme.BG_SURFACE0)
+        dur_row.pack(anchor="w", pady=(0, 10))
+
+        tk.Label(dur_row, text="Duración:", bg=theme.BG_SURFACE0,
+                 fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY).pack(side=tk.LEFT, padx=(0, 10))
+
+        self._stress_durations = [
+            ("10 s",   10),
+            ("30 s",   30),
+            ("1 min",  60),
+            ("2 min",  120),
+            ("5 min",  300),
+            ("10 min", 600),
+        ]
+        self._stress_dur_var = tk.IntVar(value=10)
+
+        for label, seconds in self._stress_durations:
+            rb = tk.Radiobutton(
+                dur_row, text=label,
+                variable=self._stress_dur_var, value=seconds,
+                bg=theme.BG_SURFACE0, fg=theme.TEXT_PRIMARY,
+                selectcolor=theme.BG_SURFACE1,
+                activebackground=theme.BG_SURFACE0,
+                font=theme.FONT_BODY,
+                indicatoron=0,
+                relief="flat", padx=10, pady=4,
+                cursor="hand2",
+            )
+            rb.pack(side=tk.LEFT, padx=3)
 
         stress_btn_row = tk.Frame(stress_inner, bg=theme.BG_SURFACE0)
         stress_btn_row.pack(anchor="w")
 
         self._stress_btn = tk.Button(
-            stress_btn_row, text="🔥  Iniciar prueba de estrés (10s)",
+            stress_btn_row, text="🔥  Iniciar prueba de estrés",
             command=self._toggle_stress, **theme.BTN_WARNING,
         )
         self._stress_btn.pack(side=tk.LEFT, padx=(0, 12))
 
+        # Max temp display
+        self._max_temp_lbl = tk.Label(
+            stress_btn_row, text="",
+            bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED, font=theme.FONT_BODY)
+        self._max_temp_lbl.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Progress bar for stress countdown
+        prog_wrap = tk.Frame(stress_inner, bg=theme.BG_SURFACE1,
+                              highlightthickness=1, highlightbackground=theme.BG_SURFACE2)
+        prog_wrap.pack(fill=tk.X, pady=(8, 4))
+        self._stress_prog = tk.Canvas(prog_wrap, height=16, bg=theme.BG_SURFACE1,
+                                       highlightthickness=0)
+        self._stress_prog.pack(fill=tk.X)
+
         self._stress_lbl = tk.Label(stress_inner, text="",
                                      bg=theme.BG_SURFACE0,
                                      fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY)
-        self._stress_lbl.pack(anchor="w", pady=(8, 0))
+        self._stress_lbl.pack(anchor="w")
 
         # Start data collection
         self.run_in_thread(self._get_cpu_info_data, on_done=self._show_cpu_info)
@@ -303,25 +348,53 @@ class Step(BaseStep):
             if self._stress_flag:
                 self._stress_flag.set()
             self._stress_running = False
-            self._stress_btn.configure(text="🔥  Iniciar prueba de estrés (10s)")
+            self._stress_btn.configure(text="🔥  Iniciar prueba de estrés")
         else:
-            self._stress_running = True
-            self._stress_btn.configure(text="■  Detener prueba de estrés")
-            self._stress_lbl.configure(text="⚡ Ejecutando prueba de estrés...",
-                                        fg=theme.WARNING)
+            self._stress_duration = self._stress_dur_var.get()
+            self._stress_max_temp = 0.0
+            self._stress_running  = True
+            self._stress_btn.configure(text="■  Detener prueba")
+            self._max_temp_lbl.configure(text="")
+            self._stress_lbl.configure(text="⚡ Iniciando estrés...", fg=theme.WARNING)
+            self._draw_stress_progress(0, self._stress_duration)
             threading.Thread(target=self._run_stress, daemon=True).start()
 
     def _run_stress(self):
-        from hardware.cpu import run_cpu_stress
-        stop_flag, results, threads = run_cpu_stress(duration_seconds=10)
+        from hardware.cpu import run_cpu_stress, get_cpu_temperature
+        dur = self._stress_duration
+        stop_flag, results, threads = run_cpu_stress(duration_seconds=dur)
         self._stress_flag = stop_flag
 
         start = time.time()
-        while time.time() - start < 10 and not stop_flag.is_set():
-            elapsed = int(time.time() - start)
-            def upd(s=elapsed):
+        while not stop_flag.is_set():
+            elapsed = time.time() - start
+            if elapsed >= dur:
+                break
+            remaining = int(dur - elapsed)
+            mins, secs = divmod(remaining, 60)
+            time_str = f"{mins}:{secs:02d}" if mins else f"{secs}s"
+
+            # Track max temperature during stress
+            try:
+                temps = get_cpu_temperature()
+                if temps:
+                    cur_temp = max(temps.values())
+                    if cur_temp > self._stress_max_temp:
+                        self._stress_max_temp = cur_temp
+            except Exception:
+                pass
+
+            def upd(e=elapsed, d=dur, ts=time_str, mt=self._stress_max_temp):
+                if not self._stress_running:
+                    return
+                pct = min(e / d, 1.0) if d > 0 else 1.0
+                self._draw_stress_progress(pct, d)
+                temp_txt = f"  |  Temp. máx: {mt:.1f}°C" if mt > 0 else ""
+                color = theme.ERROR if mt >= 90 else theme.WARNING if mt >= 75 else theme.WARNING
                 self._stress_lbl.configure(
-                    text=f"⚡ Estrés activo: {s}/10 segundos", fg=theme.WARNING)
+                    text=f"⚡ Estrés activo — Tiempo restante: {ts}{temp_txt}",
+                    fg=color)
+
             self.after(0, upd)
             time.sleep(0.5)
 
@@ -330,12 +403,47 @@ class Step(BaseStep):
             t.join(timeout=2)
 
         self._stress_running = False
+        max_t = self._stress_max_temp
 
-        def done():
-            self._stress_btn.configure(text="🔥  Iniciar prueba de estrés (10s)")
-            self._stress_lbl.configure(
-                text="✓ Prueba de estrés completada. Verifique temperatura.",
-                fg=theme.SUCCESS)
-            self.set_status(STATUS_PASSED, "CPU verificada con prueba de estrés")
+        def done(mt=max_t):
+            self._stress_btn.configure(text="🔥  Iniciar prueba de estrés")
+            self._draw_stress_progress(1.0, self._stress_duration)
+
+            if mt > 0:
+                if mt >= 95:
+                    temp_color = theme.ERROR
+                    verdict = f"⚠ Temp. máx alcanzada: {mt:.1f}°C — POSIBLE PROBLEMA DE REFRIGERACIÓN"
+                elif mt >= 85:
+                    temp_color = theme.WARNING
+                    verdict = f"⚠ Temp. máx alcanzada: {mt:.1f}°C — Límite alto, monitorear"
+                else:
+                    temp_color = theme.SUCCESS
+                    verdict = f"✓ Temp. máx alcanzada: {mt:.1f}°C — Normal"
+                self._max_temp_lbl.configure(
+                    text=f"Máx: {mt:.1f}°C", fg=temp_color)
+            else:
+                verdict = "✓ Prueba de estrés completada"
+                temp_color = theme.SUCCESS
+
+            dur_label = next((l for l, s in self._stress_durations
+                              if s == self._stress_duration), f"{self._stress_duration}s")
+            self._stress_lbl.configure(text=verdict, fg=temp_color)
+            self.set_status(STATUS_PASSED,
+                             f"CPU verificada — Estrés {dur_label}"
+                             + (f" | Temp. máx {mt:.1f}°C" if mt > 0 else ""))
 
         self.after(0, done)
+
+    def _draw_stress_progress(self, fraction, total_secs):
+        canvas = self._stress_prog
+        w = canvas.winfo_width() or 400
+        h = 16
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, w, h, fill=theme.BG_SURFACE1, outline="")
+        fw = int(w * fraction)
+        if fw > 0:
+            color = theme.ERROR if fraction > 0.9 else theme.WARNING
+            canvas.create_rectangle(0, 0, fw, h, fill=color, outline="")
+        pct_txt = f"{int(fraction * 100)}%"
+        canvas.create_text(w // 2, h // 2, text=pct_txt,
+                            fill=theme.BG_BASE, font=theme.FONT_SMALL)
