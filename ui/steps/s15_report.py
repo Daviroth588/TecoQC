@@ -326,10 +326,12 @@ class Step(BaseStep):
             on_error=self._pdf_error)
 
     def _do_generate_pdf(self, notes):
-        import os, datetime
+        import os, re, datetime
         from reportlab.lib.pagesizes import A4
         from reportlab.lib import colors
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.platypus import (
+            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak,
+        )
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import cm
         from config import STATUS_PASSED, STATUS_FAILED, STATUS_SKIPPED, STATUS_PENDING
@@ -344,7 +346,7 @@ class Step(BaseStep):
         styles = getSampleStyleSheet()
         story = []
 
-        # Title
+        # ── Title ───────────────────────────────────────────────────────────
         title_style = ParagraphStyle("title", parent=styles["Heading1"],
                                       fontSize=20, textColor=colors.HexColor("#3fa9ff"),
                                       spaceAfter=8)
@@ -363,7 +365,7 @@ class Step(BaseStep):
             story.append(Paragraph(line, info_style))
         story.append(Spacer(1, 0.5*cm))
 
-        # Summary counts
+        # ── Summary counts ──────────────────────────────────────────────────
         step_results = self._state.get("step_results", {})
         counts = {STATUS_PASSED: 0, STATUS_FAILED: 0, STATUS_SKIPPED: 0, STATUS_PENDING: 0}
         for n in range(1, 15):
@@ -410,14 +412,14 @@ class Step(BaseStep):
             verdict = f"✗ FALLIDO ({failed} fallo(s))"
             v_color = colors.HexColor("#ff5c6b")
         else:
-            verdict = f"● INCOMPLETO"
+            verdict = "● INCOMPLETO"
             v_color = colors.HexColor("#f5c542")
 
         verdict_style = ParagraphStyle("verdict", parent=styles["Heading2"],
                                         fontSize=16, textColor=v_color, spaceAfter=12)
         story.append(Paragraph(f"Resultado General: {verdict}", verdict_style))
 
-        # Results table
+        # ── Results table ───────────────────────────────────────────────────
         STEP_NAMES_PDF = {
             1: "Bienvenida", 2: "Sistema", 3: "Teclado", 4: "Trackpad",
             5: "Pantalla", 6: "Cámara", 7: "Puertos USB", 8: "Red",
@@ -472,12 +474,183 @@ class Step(BaseStep):
         results_table.setStyle(TableStyle(ts_style))
         story.append(results_table)
 
-        # Final notes
+        # ── Métricas Clave (barras visuales) ────────────────────────────────
+        story.append(Spacer(1, 0.6*cm))
+        metrics_title_style = ParagraphStyle(
+            "metrics_title", parent=styles["Heading2"],
+            fontSize=13, textColor=colors.HexColor("#3fa9ff"), spaceAfter=6,
+        )
+        story.append(Paragraph("Métricas Clave", metrics_title_style))
+
+        BAR_MAX_W = 10 * cm  # maximum width of the filled bar zone
+
+        def _make_metric_bar(label, value, max_val, unit, fill_color):
+            """Return a Table row representing a labelled progress bar."""
+            value = max(0.0, min(float(value), float(max_val)))
+            ratio = value / float(max_val) if max_val else 0
+            fill_w = BAR_MAX_W * ratio
+            empty_w = BAR_MAX_W - fill_w
+            label_text = f"{label}\n{value:.1f} {unit}"
+
+            bar_style_base = [
+                ("TOPPADDING",    (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#255570")),
+            ]
+            dark_bg = colors.HexColor("#0b1f2e")
+
+            if fill_w > 0.1 and empty_w > 0.1:
+                bar_inner = Table([["", ""]], colWidths=[fill_w, empty_w])
+                bar_inner.setStyle(TableStyle(bar_style_base + [
+                    ("BACKGROUND", (0, 0), (0, 0), fill_color),
+                    ("BACKGROUND", (1, 0), (1, 0), dark_bg),
+                ]))
+            elif fill_w <= 0.1:
+                bar_inner = Table([[""]], colWidths=[BAR_MAX_W])
+                bar_inner.setStyle(TableStyle(bar_style_base + [
+                    ("BACKGROUND", (0, 0), (0, 0), dark_bg),
+                ]))
+            else:
+                bar_inner = Table([[""]], colWidths=[BAR_MAX_W])
+                bar_inner.setStyle(TableStyle(bar_style_base + [
+                    ("BACKGROUND", (0, 0), (0, 0), fill_color),
+                ]))
+
+            lbl_style = ParagraphStyle(
+                "ml", parent=styles["Normal"],
+                fontSize=8, textColor=colors.HexColor("#d0eeff"),
+            )
+            row_table = Table(
+                [[Paragraph(label_text, lbl_style), bar_inner]],
+                colWidths=[4.5*cm, BAR_MAX_W],
+            )
+            row_table.setStyle(TableStyle([
+                ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
+                ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#112b3f")),
+            ]))
+            return row_table
+
+        # 1. Batería — Salud
+        battery_val = 0.0
+        bat_details = (step_results.get(14, {}).get("details", "") or "")
+        m = re.search(r"Salud[:\s]+([0-9]+(?:\.[0-9]+)?)\s*%", bat_details, re.IGNORECASE)
+        if m:
+            battery_val = float(m.group(1))
+        bat_color = (colors.HexColor("#27c97a") if battery_val >= 80
+                     else colors.HexColor("#f5c542") if battery_val >= 50
+                     else colors.HexColor("#ff5c6b"))
+        story.append(_make_metric_bar("Batería — Salud", battery_val, 100, "%", bat_color))
+        story.append(Spacer(1, 0.15*cm))
+
+        # 2. CPU — Temperatura máxima
+        cpu_val = 0.0
+        cpu_details = (step_results.get(10, {}).get("details", "") or "")
+        m = re.search(r"Temp\.?\s*m[aá]x\.?\s*([0-9]+(?:\.[0-9]+)?)\s*°?C",
+                      cpu_details, re.IGNORECASE)
+        if m:
+            cpu_val = float(m.group(1))
+        cpu_color = (colors.HexColor("#ff5c6b") if cpu_val > 85
+                     else colors.HexColor("#f5c542") if cpu_val > 70
+                     else colors.HexColor("#27c97a"))
+        story.append(_make_metric_bar("CPU — Temperatura máx.", cpu_val, 100, "°C", cpu_color))
+        story.append(Spacer(1, 0.15*cm))
+
+        # 3. Almacenamiento — Velocidad
+        storage_val = 0.0
+        stor_details = (step_results.get(13, {}).get("details", "") or "")
+        m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*MB/s", stor_details, re.IGNORECASE)
+        if m:
+            storage_val = float(m.group(1))
+        stor_color = (colors.HexColor("#27c97a") if storage_val >= 200
+                      else colors.HexColor("#f5c542") if storage_val >= 80
+                      else colors.HexColor("#ff5c6b"))
+        story.append(_make_metric_bar(
+            "Almacenamiento — Velocidad", storage_val, 500, "MB/s", stor_color))
+        story.append(Spacer(1, 0.15*cm))
+
+        # 4. RAM — Integridad
+        ram_val = 100.0
+        ram_details = (step_results.get(12, {}).get("details", "") or "")
+        if re.search(r"0\s+errores?", ram_details, re.IGNORECASE):
+            ram_val = 100.0
+        else:
+            m = re.search(r"([0-9]+)\s+errores?", ram_details, re.IGNORECASE)
+            if m:
+                ram_val = max(0.0, 100.0 - int(m.group(1)) * 10)
+        ram_color = (colors.HexColor("#27c97a") if ram_val == 100
+                     else colors.HexColor("#ff5c6b"))
+        story.append(_make_metric_bar("RAM — Integridad", ram_val, 100, "%", ram_color))
+
+        # ── Final notes ─────────────────────────────────────────────────────
         if notes:
             story.append(Spacer(1, 0.5*cm))
             notes_style = ParagraphStyle("notes", parent=styles["Normal"],
                                           fontSize=9, textColor=colors.HexColor("#7ab8d4"))
             story.append(Paragraph(f"Observaciones: {notes}", notes_style))
+
+        # ── Página 2: Etiqueta con código de barras ──────────────────────────
+        story.append(PageBreak())
+
+        label_title_style = ParagraphStyle(
+            "label_title", parent=styles["Heading1"],
+            fontSize=18, textColor=colors.HexColor("#3fa9ff"),
+            spaceAfter=10, alignment=1,
+        )
+        story.append(Paragraph("Etiqueta de Inspección", label_title_style))
+        story.append(Spacer(1, 0.4*cm))
+
+        db_id = self._state.get("db_inspection_id", "")
+        barcode_value = (f"TECOQC-{db_id}" if db_id
+                         else (serial if serial and serial != "N/D" else "TECOQC-000"))
+
+        label_info_style = ParagraphStyle(
+            "label_info", parent=styles["Normal"],
+            fontSize=11, textColor=colors.HexColor("#d0eeff"),
+            alignment=1, spaceAfter=4,
+        )
+        for line in [
+            f"S/N: {serial}",
+            f"Modelo: {model}",
+            f"Técnico: {tech}",
+            f"Fecha: {date}",
+            f"ID Inspección: {db_id if db_id else 'N/D'}",
+        ]:
+            story.append(Paragraph(line, label_info_style))
+        story.append(Spacer(1, 0.6*cm))
+
+        # Code128 barcode — centred via a single-cell Table
+        try:
+            from reportlab.graphics.barcode import code128
+            barcode = code128.Code128(str(barcode_value), barHeight=50, barWidth=1.2)
+            barcode_table = Table([[barcode]], colWidths=[16*cm])
+            barcode_table.setStyle(TableStyle([
+                ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                ("BACKGROUND",    (0, 0), (-1, -1), colors.white),
+            ]))
+            story.append(barcode_table)
+        except Exception:
+            bc_style = ParagraphStyle(
+                "bc_fallback", parent=styles["Normal"],
+                fontSize=14, textColor=colors.black,
+                alignment=1, fontName="Courier-Bold",
+            )
+            story.append(Paragraph(str(barcode_value), bc_style))
+
+        story.append(Spacer(1, 0.5*cm))
+        instr_style = ParagraphStyle(
+            "instr", parent=styles["Normal"],
+            fontSize=9, textColor=colors.HexColor("#7ab8d4"), alignment=1,
+        )
+        story.append(Paragraph("Imprima esta página y péguela en el equipo.", instr_style))
 
         doc.build(story)
         return pdf_path

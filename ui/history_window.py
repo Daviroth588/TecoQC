@@ -48,6 +48,14 @@ class HistoryWindow(tk.Toplevel):
                                     font=theme.FONT_BODY, padx=16, pady=8)
         self._stats_lbl.pack(side=tk.LEFT)
 
+        # CSV export button (right side, before search)
+        csv_btn = tk.Button(
+            stats_bar, text="📥 Exportar CSV",
+            command=self._export_csv,
+            **theme.BTN_SECONDARY,
+        )
+        csv_btn.pack(side=tk.RIGHT, padx=(0, 8), pady=6)
+
         # Search bar
         search_frame = tk.Frame(stats_bar, bg=theme.BG_MANTLE)
         search_frame.pack(side=tk.RIGHT, padx=16, pady=6)
@@ -266,3 +274,66 @@ class HistoryWindow(tk.Toplevel):
                      text=f"Observaciones: {notes}",
                      bg=theme.BG_BASE, fg=theme.TEXT_MUTED,
                      font=theme.FONT_SMALL).pack(anchor="w", pady=(8, 0))
+
+    def _export_csv(self):
+        import csv
+        from tkinter import filedialog, messagebox
+
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Exportar historial como CSV",
+            defaultextension=".csv",
+            filetypes=[("Archivo CSV", "*.csv"), ("Todos los archivos", "*.*")],
+            initialfile="TecoQC_historial.csv",
+        )
+        if not path:
+            return
+
+        try:
+            from config import STATUS_PASSED, STATUS_FAILED, STATUS_SKIPPED, STATUS_PENDING
+            STATUS_LABELS_CSV = {
+                STATUS_PASSED:  "Aprobado",
+                STATUS_FAILED:  "Fallido",
+                STATUS_SKIPPED: "Omitido",
+                STATUS_PENDING: "Pendiente",
+            }
+
+            inspections = self._all_inspections
+            # Compute pass/fail/skip counts from step_results for each inspection
+            from data.db import get_inspection_steps
+            rows = []
+            for insp in inspections:
+                steps = []
+                try:
+                    steps = get_inspection_steps(insp["id"])
+                except Exception:
+                    pass
+                passed  = sum(1 for s in steps if s.get("status") == STATUS_PASSED)
+                failed  = sum(1 for s in steps if s.get("status") == STATUS_FAILED)
+                skipped = sum(1 for s in steps if s.get("status") == STATUS_SKIPPED)
+                rows.append({
+                    "ID":        insp.get("id", ""),
+                    "Fecha":     insp.get("date", "") or insp.get("created_at", ""),
+                    "Técnico":   insp.get("technician", ""),
+                    "S/N":       insp.get("serial_number", ""),
+                    "Modelo":    insp.get("model", ""),
+                    "Resultado": STATUS_LABELS_CSV.get(insp.get("overall_status", ""), ""),
+                    "Aprobados": passed,
+                    "Fallidos":  failed,
+                    "Omitidos":  skipped,
+                })
+
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                fieldnames = ["ID", "Fecha", "Técnico", "S/N", "Modelo",
+                              "Resultado", "Aprobados", "Fallidos", "Omitidos"]
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            messagebox.showinfo("Exportación exitosa",
+                                f"Se exportaron {len(rows)} registros correctamente.\n{path}",
+                                parent=self)
+        except Exception as exc:
+            from tkinter import messagebox as mb
+            mb.showerror("Error al exportar",
+                         f"No se pudo guardar el archivo CSV:\n{exc}", parent=self)
