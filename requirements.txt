@@ -2,9 +2,14 @@ psutil>=5.9.0
 WMI>=1.5.1
 Pillow>=10.0.0
 pywin32>=306
+reportlab>=4.0.0
+
+# Camera live preview
+opencv-python>=4.8.0
+
+# Microphone / audio channel test
+sounddevice>=0.4.6
+numpy>=1.24.0
+
+# Build tool (solo para generar .exe)
 pyinstaller>=6.0.0
-# Optional - install for camera live preview:
-# opencv-python>=4.8.0
-# Optional - install for microphone test:
-# sounddevice>=0.4.6
-# numpy>=1.24.0
