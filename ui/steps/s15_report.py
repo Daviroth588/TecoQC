@@ -128,7 +128,13 @@ class Step(BaseStep):
             btn_row, text="📊  Ver Historial",
             command=self._open_history, **theme.BTN_SECONDARY,
         )
-        self._history_btn.pack(side=tk.LEFT, padx=(0, 12))
+        self._history_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._compare_btn = tk.Button(
+            btn_row, text="🔄  Comparar con anterior",
+            command=self._compare_with_previous, **theme.BTN_NEUTRAL,
+        )
+        self._compare_btn.pack(side=tk.LEFT, padx=(0, 12))
 
         self._open_btn = tk.Button(
             btn_row, text="🌐  Abrir en navegador",
@@ -283,6 +289,7 @@ class Step(BaseStep):
             notes = self._final_notes_entry.get().strip() if hasattr(self, "_final_notes_entry") else ""
             self._state["final_notes"] = notes
             db_id = save_inspection(self._state)
+            self._state["db_inspection_id"] = db_id
             current_text = self._report_status_lbl.cget("text")
             self._report_status_lbl.configure(
                 text=current_text + f"\n✓ Guardado en historial (ID #{db_id})")

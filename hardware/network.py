@@ -120,6 +120,76 @@ def get_wifi_interface_status():
     return info
 
 
+def get_connected_wifi_detail():
+    """Llama a get_wifi_interface_status() y enriquece con interpretación de protocolo/banda."""
+    base = get_wifi_interface_status()
+    detail = dict(base)
+
+    # Parse signal percentage
+    raw_signal = detail.get("signal", "")
+    try:
+        detail["signal_pct"] = int(str(raw_signal).replace("%", "").strip())
+    except (ValueError, TypeError):
+        detail["signal_pct"] = None
+
+    # Parse channel and infer band
+    raw_channel = ""
+    radio_type = ""
+    raw_text = detail.get("raw", "")
+    for line in raw_text.splitlines():
+        line_s = line.strip()
+        if ":" in line_s:
+            key, _, val = line_s.partition(":")
+            key_l = key.strip().lower()
+            if "canal" in key_l or "channel" in key_l:
+                raw_channel = val.strip()
+            elif "tipo de radio" in key_l or "radio type" in key_l:
+                radio_type = val.strip()
+            elif "velocidad de recepción" in key_l or "receive rate" in key_l:
+                detail["speed"] = val.strip()
+            elif "protocolo" in key_l or "protocol" in key_l:
+                if not radio_type:
+                    radio_type = val.strip()
+
+    detail["channel"] = raw_channel
+    detail["radio_type"] = radio_type
+
+    # Infer band from channel number
+    try:
+        ch_num = int(raw_channel)
+        detail["band"] = "5 GHz" if ch_num > 14 else "2.4 GHz"
+    except (ValueError, TypeError):
+        # Fallback: infer from radio_type
+        rt_lower = radio_type.lower()
+        if "802.11a" in rt_lower and "802.11ax" not in rt_lower:
+            detail["band"] = "5 GHz"
+        elif "802.11ac" in rt_lower or "802.11ax" in rt_lower:
+            detail["band"] = "5 GHz"
+        else:
+            detail["band"] = "N/D"
+
+    # Interpret protocol name
+    rt_lower = radio_type.lower()
+    if "802.11ax" in rt_lower:
+        detail["protocol_name"] = "WiFi 6 (802.11ax)"
+    elif "802.11ac" in rt_lower:
+        detail["protocol_name"] = "WiFi 5 (802.11ac)"
+    elif "802.11n" in rt_lower:
+        detail["protocol_name"] = "WiFi 4 (802.11n)"
+    elif "802.11a" in rt_lower:
+        detail["protocol_name"] = "802.11a"
+    elif "802.11g" in rt_lower:
+        detail["protocol_name"] = "802.11g"
+    elif "802.11b" in rt_lower:
+        detail["protocol_name"] = "802.11b"
+    elif radio_type:
+        detail["protocol_name"] = radio_type
+    else:
+        detail["protocol_name"] = "N/D"
+
+    return detail
+
+
 def ping_host(host="8.8.8.8", count=4):
     """Realiza ping a un host y retorna el resultado."""
     result = {

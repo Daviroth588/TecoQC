@@ -59,6 +59,26 @@ class Step(BaseStep):
                                          fg=theme.TEXT_MUTED, font=theme.FONT_SMALL)
         self._wifi_count_lbl.pack(anchor="w", padx=16, pady=(0, 8))
 
+        # ── Connected WiFi detail card ─────────────────────────────────
+        self._wifi_detail_card = Card(parent)
+        self._wifi_detail_card.pack(fill=tk.X, pady=(0, 8))
+
+        wifi_detail_hdr = tk.Frame(self._wifi_detail_card, bg=theme.BG_SURFACE0)
+        wifi_detail_hdr.pack(fill=tk.X, padx=16, pady=(10, 6))
+        tk.Label(wifi_detail_hdr, text="Conexión WiFi Actual",
+                 bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
+                 font=theme.FONT_H3).pack(side=tk.LEFT)
+
+        tk.Frame(self._wifi_detail_card, height=1, bg=theme.BG_SURFACE2).pack(fill=tk.X, padx=16)
+
+        self._wifi_detail_spinner = Spinner(self._wifi_detail_card,
+                                             text="Leyendo interfaz WiFi...",
+                                             bg=theme.BG_SURFACE0)
+        self._wifi_detail_spinner.pack(padx=16, pady=8)
+
+        self._wifi_detail_frame = tk.Frame(self._wifi_detail_card, bg=theme.BG_SURFACE0)
+        self._wifi_detail_frame.pack(fill=tk.X, padx=16, pady=(0, 10))
+
         # ── Connectivity tests row ─────────────────────────────────────
         conn_frame = tk.Frame(parent, bg=theme.BG_BASE)
         conn_frame.pack(fill=tk.X, pady=(0, 8))
@@ -162,6 +182,91 @@ class Step(BaseStep):
 
     def on_enter(self):
         self._scan_wifi()
+        self._load_wifi_detail()
+
+    def _load_wifi_detail(self):
+        for w in self._wifi_detail_frame.winfo_children():
+            w.destroy()
+        self._wifi_detail_spinner.pack(padx=16, pady=8)
+        self._wifi_detail_spinner.start()
+        self.run_in_thread(self._get_wifi_detail, on_done=self._show_wifi_detail,
+                            on_error=lambda e: self._wifi_detail_err(e))
+
+    def _get_wifi_detail(self):
+        from hardware.network import get_connected_wifi_detail
+        return get_connected_wifi_detail()
+
+    def _show_wifi_detail(self, detail):
+        self._wifi_detail_spinner.stop()
+        self._wifi_detail_spinner.pack_forget()
+
+        for w in self._wifi_detail_frame.winfo_children():
+            w.destroy()
+
+        ssid = detail.get("ssid", "")
+        if not ssid:
+            tk.Label(self._wifi_detail_frame,
+                     text="No conectado a ninguna red WiFi.",
+                     bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                     font=theme.FONT_BODY).pack(anchor="w", pady=4)
+            return
+
+        # Signal color
+        sig_pct = detail.get("signal_pct")
+        if sig_pct is not None:
+            sig_color = (theme.SUCCESS if sig_pct >= 70
+                         else theme.WARNING if sig_pct >= 40
+                         else theme.ERROR)
+            sig_text = f"{sig_pct}%"
+        else:
+            sig_color = theme.TEXT_MUTED
+            sig_text = detail.get("signal", "N/D")
+
+        rows_left = [
+            ("SSID", ssid, theme.TEXT_PRIMARY),
+            ("Señal", sig_text, sig_color),
+            ("Vel. recepción", detail.get("speed", "N/D"), theme.TEXT_PRIMARY),
+        ]
+        rows_right = [
+            ("Estado", detail.get("state", "N/D"), theme.TEXT_PRIMARY),
+            ("Protocolo", detail.get("protocol_name", "N/D"), theme.TEXT_PRIMARY),
+            ("Banda", detail.get("band", "N/D"), theme.ACCENT_BLUE),
+        ]
+
+        two_col = tk.Frame(self._wifi_detail_frame, bg=theme.BG_SURFACE0)
+        two_col.pack(fill=tk.X)
+        left_col = tk.Frame(two_col, bg=theme.BG_SURFACE0)
+        left_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        right_col = tk.Frame(two_col, bg=theme.BG_SURFACE0)
+        right_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        for lbl, val, fg in rows_left:
+            row = tk.Frame(left_col, bg=theme.BG_SURFACE0)
+            row.pack(fill=tk.X, pady=2)
+            tk.Label(row, text=lbl + ":", bg=theme.BG_SURFACE0,
+                     fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY,
+                     width=18, anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, text=val, bg=theme.BG_SURFACE0,
+                     fg=fg, font=theme.FONT_BODY_BOLD,
+                     anchor="w").pack(side=tk.LEFT)
+
+        for lbl, val, fg in rows_right:
+            row = tk.Frame(right_col, bg=theme.BG_SURFACE0)
+            row.pack(fill=tk.X, pady=2)
+            tk.Label(row, text=lbl + ":", bg=theme.BG_SURFACE0,
+                     fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY,
+                     width=14, anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, text=val, bg=theme.BG_SURFACE0,
+                     fg=fg, font=theme.FONT_BODY_BOLD,
+                     anchor="w").pack(side=tk.LEFT)
+
+    def _wifi_detail_err(self, error):
+        self._wifi_detail_spinner.stop()
+        self._wifi_detail_spinner.pack_forget()
+        tk.Label(self._wifi_detail_frame,
+                 text=f"Error al leer interfaz WiFi: {error}",
+                 bg=theme.BG_SURFACE0, fg=theme.WARNING,
+                 font=theme.FONT_SMALL).pack(anchor="w")
 
     def _get_eth(self):
         from hardware.network import get_ethernet_adapters_wmi, get_network_adapters
@@ -235,7 +340,7 @@ class Step(BaseStep):
 
         hdr = tk.Frame(self._wifi_frame, bg=theme.BG_SURFACE1)
         hdr.pack(fill=tk.X)
-        for col, w in [("SSID", 200), ("Señal", 70), ("Auth", 90), ("Canal", 60)]:
+        for col, w in [("SSID", 200), ("Señal", 70), ("Auth", 90), ("Canal", 60), ("Banda", 65)]:
             tk.Label(hdr, text=col, bg=theme.BG_SURFACE1,
                      fg=theme.TEXT_MUTED, font=theme.FONT_SMALL,
                      width=w//7, anchor="w", pady=4, padx=6).pack(side=tk.LEFT)
@@ -256,11 +361,25 @@ class Step(BaseStep):
             except Exception:
                 sig_color = theme.TEXT_MUTED
 
+            # Infer band from channel or radio_type
+            try:
+                ch_num = int(net.get("channel", "0"))
+                band = "5 GHz" if ch_num > 14 else "2.4 GHz"
+            except (ValueError, TypeError):
+                rt = net.get("radio_type", "").lower()
+                if "802.11ac" in rt or "802.11ax" in rt or ("802.11a" in rt and "802.11ax" not in rt):
+                    band = "5 GHz"
+                elif "802.11n" in rt or "802.11g" in rt or "802.11b" in rt:
+                    band = "2.4 GHz"
+                else:
+                    band = "N/D"
+
             for text, fg, ww in [
                 (net.get("ssid", "N/D")[:30], theme.TEXT_PRIMARY, 200),
                 (signal, sig_color, 70),
                 (net.get("auth", "N/D")[:15], theme.TEXT_SECONDARY, 90),
                 (net.get("channel", "N/D"), theme.TEXT_MUTED, 60),
+                (band, theme.ACCENT_BLUE if band != "N/D" else theme.TEXT_MUTED, 65),
             ]:
                 tk.Label(row, text=text, bg=bg, fg=fg,
                           font=theme.FONT_SMALL, width=ww//7,

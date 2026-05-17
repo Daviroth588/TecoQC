@@ -23,6 +23,7 @@ class Step(BaseStep):
         self._stress_running = False
         self._stress_flag = None
         self._usage_history = [0.0] * 60   # last 60 readings
+        self._temp_history  = [0.0] * 60   # last 60 temperature readings
         self._graph_job = None
         self._baseline_freq = 0.0
 
@@ -97,6 +98,18 @@ class Step(BaseStep):
         )
         self._graph_canvas.pack(fill=tk.X)
         self._draw_graph()
+
+        # Temperature history graph
+        tk.Label(mon_inner, text="Historial de temperatura (último minuto):",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_SMALL).pack(anchor="w", pady=(12, 4))
+
+        self._temp_graph_canvas = tk.Canvas(
+            mon_inner, height=80, bg=theme.BG_CRUST,
+            highlightthickness=1, highlightbackground=theme.BG_SURFACE2,
+        )
+        self._temp_graph_canvas.pack(fill=tk.X)
+        self._draw_temp_graph()
 
         # Per-core usage
         self._core_frame = tk.Frame(mon_inner, bg=theme.BG_SURFACE0)
@@ -258,8 +271,10 @@ class Step(BaseStep):
                 from hardware.cpu import get_cpu_temperature
                 temps = get_cpu_temperature()
                 temp_str = "N/D"
+                temp_val = 0.0
                 if temps:
                     first_temp = list(temps.values())[0]
+                    temp_val = first_temp
                     temp_str = f"{first_temp:.1f}°C"
                     if first_temp >= TEMP_CRITICAL:
                         temp_color = theme.ERROR
@@ -271,13 +286,17 @@ class Step(BaseStep):
                     temp_color = theme.TEXT_MUTED
 
                 # Update UI in main thread
-                def update(u=usage, pc=per_core[:], ts=temp_str, tc=temp_color, fv=freq_val):
+                def update(u=usage, pc=per_core[:], ts=temp_str, tc=temp_color,
+                           fv=freq_val, tv=temp_val):
                     if not self._monitoring:
                         return
                     self._update_usage_bar(u)
                     self._update_per_core(pc)
                     self._temp_lbl.configure(text=ts, fg=tc)
                     self._update_graph(u)
+                    self._temp_history.pop(0)
+                    self._temp_history.append(tv)
+                    self._draw_temp_graph()
 
                 self.after(0, update)
             except Exception:
@@ -347,6 +366,55 @@ class Step(BaseStep):
 
         if len(coords) >= 4:
             canvas.create_line(*coords, fill=theme.ACCENT_BLUE, width=2, smooth=True)
+
+    def _draw_temp_graph(self):
+        canvas = self._temp_graph_canvas
+        w = canvas.winfo_width() or 400
+        h = 80
+        canvas.delete("all")
+
+        # Dark background
+        canvas.create_rectangle(0, 0, w, h, fill=theme.BG_CRUST, outline="")
+
+        # Reference lines: 50°C, 75°C, 85°C — max shown temp is 100°C
+        max_temp_scale = 100.0
+        for ref_temp, ref_color, ref_label in [
+            (50, theme.TEXT_MUTED,  "50°C"),
+            (75, theme.WARNING,     "75°C"),
+            (85, theme.ERROR,       "85°C"),
+        ]:
+            y = h - (ref_temp / max_temp_scale * h)
+            canvas.create_line(0, y, w, y, fill=ref_color, dash=(2, 4))
+            canvas.create_text(3, y - 6, text=ref_label, anchor="nw",
+                               fill=ref_color, font=(theme.FONT_FAMILY, 7))
+
+        # Determine line color based on peak temperature in history
+        max_in_history = max(self._temp_history) if self._temp_history else 0.0
+        if max_in_history >= 85:
+            line_color = theme.ERROR
+        elif max_in_history >= 75:
+            line_color = theme.WARNING
+        else:
+            line_color = theme.SUCCESS
+
+        # Draw temperature line
+        points = self._temp_history
+        step = w / max(len(points) - 1, 1)
+        coords = []
+        for i, val in enumerate(points):
+            x = i * step
+            y = h - (min(val, max_temp_scale) / max_temp_scale * h)
+            coords.extend([x, y])
+
+        if len(coords) >= 4:
+            canvas.create_line(*coords, fill=line_color, width=2, smooth=True)
+
+        # Current temperature label in upper-right corner
+        current_temp = self._temp_history[-1] if self._temp_history else 0.0
+        if current_temp > 0:
+            temp_text = f"{current_temp:.1f}°C"
+            canvas.create_text(w - 4, 4, text=temp_text, anchor="ne",
+                               fill=line_color, font=(theme.FONT_FAMILY, 8, "bold"))
 
     def _toggle_stress(self):
         if self._stress_running:
