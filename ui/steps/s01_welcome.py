@@ -43,8 +43,7 @@ class Step(BaseStep):
             font=theme.FONT_BODY,
             wraplength=680,
             justify="center",
-            pady=(0, 16),
-        ).pack()
+        ).pack(pady=(0, 16))
 
         # Form card
         form_card = Card(parent)

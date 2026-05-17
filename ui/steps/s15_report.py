@@ -60,7 +60,7 @@ class Step(BaseStep):
                                 font=(theme.FONT_FAMILY, 28, "bold"), pady=10)
             num_lbl.pack()
             tk.Label(c, text=label, bg=color, fg=theme.BG_BASE,
-                      font=theme.FONT_BODY_BOLD, pady=(0, 8)).pack()
+                      font=theme.FONT_BODY_BOLD).pack(pady=(0, 8))
             self._summary_cards[key] = num_lbl
 
         # Overall result
