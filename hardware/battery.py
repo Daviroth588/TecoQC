@@ -82,7 +82,8 @@ def run_battery_report():
     """Ejecuta powercfg /batteryreport y retorna la ruta del archivo."""
     result = {"path": None, "error": None, "available": False}
     try:
-        output_path = os.path.join(os.path.expanduser("~"), "battery_report.html")
+        from config import get_data_dir
+        output_path = os.path.join(get_data_dir(), "battery_report.html")
         proc = subprocess.run(
             ["powercfg", "/batteryreport",
              "/output", output_path, "/xml"],

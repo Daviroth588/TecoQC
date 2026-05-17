@@ -22,7 +22,8 @@ def get_memory_info():
 
 
 def get_ram_slots_info():
-    """Retorna información detallada de los slots de RAM via WMI."""
+    """Retorna información detallada de los slots de RAM via WMI.
+    Si WMI retorna lista vacía o falla, usa PowerShell como fallback."""
     slots = []
     try:
         import wmi
@@ -44,6 +45,59 @@ def get_ram_slots_info():
             slots.append(slot)
     except Exception as e:
         slots.append({"error": str(e)})
+
+    # If WMI returned nothing useful, try PowerShell fallback
+    has_real_data = any("error" not in s for s in slots)
+    if not has_real_data:
+        ps_slots = _get_ram_slots_powershell()
+        if ps_slots:
+            return ps_slots
+        # Both methods failed — return an informative message
+        return [{"error": (
+            "No se pudo obtener información de módulos. "
+            "El equipo puede tener RAM soldada (LPDDR) o restricciones de seguridad WMI."
+        )}]
+
+    return slots
+
+
+def _get_ram_slots_powershell():
+    """Fallback: usa PowerShell Get-WmiObject para obtener info RAM."""
+    import subprocess, json
+    slots = []
+    try:
+        ps_cmd = (
+            "Get-WmiObject Win32_PhysicalMemory | "
+            "Select-Object BankLabel,DeviceLocator,Capacity,Speed,"
+            "Manufacturer,PartNumber,MemoryType,FormFactor | "
+            "ConvertTo-Json -Compress"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace"
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout.strip())
+            if isinstance(data, dict):  # Single module returns object, not array
+                data = [data]
+            for m in data:
+                capacity = m.get("Capacity") or 0
+                slots.append({
+                    "bank_label": str(m.get("BankLabel") or "").strip(),
+                    "device_locator": str(m.get("DeviceLocator") or "").strip(),
+                    "capacity_bytes": int(capacity),
+                    "capacity_gb": round(int(capacity) / (1024**3), 2),
+                    "speed_mhz": m.get("Speed") or 0,
+                    "manufacturer": str(m.get("Manufacturer") or "").strip(),
+                    "part_number": str(m.get("PartNumber") or "").strip(),
+                    "serial_number": "",
+                    "memory_type": _memory_type_name(m.get("MemoryType") or 0),
+                    "form_factor": _form_factor_name(m.get("FormFactor") or 0),
+                    "source": "powershell",
+                })
+    except Exception as e:
+        slots.append({"error": f"PowerShell fallback: {e}"})
     return slots
 
 
