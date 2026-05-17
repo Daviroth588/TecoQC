@@ -352,23 +352,13 @@ def generate_html_report(wizard_state: dict) -> str:
 </body>
 </html>"""
 
-    # Save to Desktop
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    if not os.path.isdir(desktop):
-        desktop = os.path.expanduser("~")
-
+    from config import get_data_dir
     safe_serial = "".join(c if c.isalnum() or c in "-_" else "_" for c in serial)
     filename = f"TecoQC_Reporte_{safe_serial}_{report_date}.html"
-    filepath = os.path.join(desktop, filename)
+    filepath = os.path.join(get_data_dir(), filename)
 
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(html)
-    except Exception as e:
-        # Fallback: save to home dir
-        filepath = os.path.join(os.path.expanduser("~"), filename)
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(html)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(html)
 
     return filepath
 

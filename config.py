@@ -80,3 +80,59 @@ DISK_IOPS_4K_MIN        = 500   # IOPS mínimas en bloques de 4 KB
 
 # Network speed threshold
 NET_DOWNLOAD_MIN_MB_S = 0.5
+
+
+import os
+import sys
+
+
+def get_data_dir() -> str:
+    """
+    Retorna el directorio donde TecoQC guarda sus datos.
+
+    - Si el ejecutable/script está en una unidad removible (USB): usa
+      una carpeta 'TecoQC_Data' junto al ejecutable.
+    - Si no: usa ~/.tecoqc/ (comportamiento anterior).
+    """
+    # Determine base path of the running app
+    if getattr(sys, "frozen", False):
+        # PyInstaller exe
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+
+    # On Windows, check drive type
+    try:
+        import ctypes
+        drive = os.path.splitdrive(base)[0] + "\\"
+        if drive and drive != "\\":
+            DRIVE_REMOVABLE = 2
+            drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive)
+            if drive_type == DRIVE_REMOVABLE:
+                data_dir = os.path.join(base, "TecoQC_Data")
+                os.makedirs(data_dir, exist_ok=True)
+                return data_dir
+    except Exception:
+        pass
+
+    # Default: user home directory
+    data_dir = os.path.join(os.path.expanduser("~"), ".tecoqc")
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+
+def is_usb_mode() -> bool:
+    """Retorna True si TecoQC está corriendo desde una unidad USB."""
+    try:
+        import ctypes
+        if getattr(sys, "frozen", False):
+            base = os.path.dirname(sys.executable)
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+        drive = os.path.splitdrive(base)[0] + "\\"
+        if drive and drive != "\\":
+            DRIVE_REMOVABLE = 2
+            return ctypes.windll.kernel32.GetDriveTypeW(drive) == DRIVE_REMOVABLE
+    except Exception:
+        pass
+    return False

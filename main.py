@@ -12,7 +12,7 @@ from tkinter import messagebox
 # Ensure the project root is on the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import APP_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT
+from config import APP_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT, get_data_dir, is_usb_mode
 from ui.wizard_manager import WizardManager
 
 
@@ -20,7 +20,7 @@ def _check_session_recovery(root):
     """Si hay una sesión guardada, ofrece restaurarla."""
     import json
     from tkinter import messagebox
-    session_path = os.path.join(os.path.expanduser("~"), ".tecoqc", "session.json")
+    session_path = os.path.join(get_data_dir(), "session.json")
     if not os.path.exists(session_path):
         return
     try:
@@ -94,12 +94,15 @@ def main():
     app = WizardManager(root)
     app.pack(fill=tk.BOTH, expand=True)
 
+    # Show USB mode indicator in title bar
+    if is_usb_mode():
+        root.title(APP_TITLE + "  [MODO USB — datos guardados en USB]")
+
     # Auto-save session state every 30s
     def _autosave():
         try:
             import json
-            session_path = os.path.join(os.path.expanduser("~"), ".tecoqc", "session.json")
-            os.makedirs(os.path.dirname(session_path), exist_ok=True)
+            session_path = os.path.join(get_data_dir(), "session.json")
             with open(session_path, "w", encoding="utf-8") as f:
                 json.dump(app._state, f, ensure_ascii=False, default=str)
         except Exception:

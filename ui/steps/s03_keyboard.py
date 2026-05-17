@@ -110,6 +110,7 @@ class Step(BaseStep):
         self._key_buttons  = {}   # keysym -> button widget
         self._total_keys   = 0
         self._current_layout = "ES"   # default
+        self._fn_btn_widget  = None   # referencia al widget de la tecla Fn
 
         # ── Selector de idioma ─────────────────────────────────────────
         selector_frame = tk.Frame(parent, bg=theme.BG_SURFACE0,
@@ -159,6 +160,11 @@ class Step(BaseStep):
                   command=self._reset,
                   **theme.BTN_SECONDARY).pack(side=tk.RIGHT)
 
+        tk.Label(stats_row,
+                 text="Usa el mouse para navegar • Win key bloqueada durante el test",
+                 bg=theme.BG_BASE, fg=theme.TEXT_MUTED,
+                 font=theme.FONT_SMALL).pack(side=tk.RIGHT, padx=8)
+
         # ── Canvas del teclado ─────────────────────────────────────────
         self._kbd_frame = tk.Frame(parent, bg=theme.BG_MANTLE,
                                     highlightthickness=1,
@@ -169,7 +175,66 @@ class Step(BaseStep):
         self._legend_frame = tk.Frame(parent, bg=theme.BG_BASE)
         self._legend_frame.pack(fill=tk.X, pady=(6, 0))
 
+        # ── Sección de teclas de verificación manual ───────────────────
+        manual_frame = tk.Frame(parent, bg=theme.BG_BASE)
+        manual_frame.pack(fill=tk.X, pady=(8, 0))
+
+        tk.Label(manual_frame,
+                 text="Teclas que requieren verificación manual:",
+                 bg=theme.BG_BASE, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_SMALL).pack(anchor="w", pady=(0, 4))
+
+        self._manual_keys_row = tk.Frame(manual_frame, bg=theme.BG_BASE)
+        self._manual_keys_row.pack(anchor="w")
+
+        self._build_manual_fn_widget()
+
         self._build_keyboard()
+        self._update_stats()
+
+    # ── Tecla Fn — widget manual ───────────────────────────────────────
+    def _build_manual_fn_widget(self):
+        for w in self._manual_keys_row.winfo_children():
+            w.destroy()
+
+        fn_frame = tk.Frame(self._manual_keys_row, bg=theme.BG_SURFACE0,
+                             highlightthickness=1,
+                             highlightbackground=theme.BG_SURFACE2)
+        fn_frame.pack(side=tk.LEFT, padx=(0, 8), pady=2, ipadx=8, ipady=6)
+
+        tk.Label(fn_frame, text="Fn",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_PRIMARY,
+                 font=theme.FONT_BODY_BOLD).pack(side=tk.LEFT, padx=(4, 8))
+
+        tk.Label(fn_frame,
+                 text="¿La tecla Fn activa funciones especiales (brillo, vol, etc.)?",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_SMALL).pack(side=tk.LEFT, padx=(0, 12))
+
+        tk.Button(fn_frame, text="✓ Funciona",
+                  command=self._fn_pass,
+                  bg=theme.SUCCESS, fg=theme.BG_BASE,
+                  font=theme.FONT_SMALL,
+                  relief="flat", padx=8, pady=3,
+                  cursor="hand2").pack(side=tk.LEFT, padx=2)
+
+        tk.Button(fn_frame, text="✗ No funciona",
+                  command=self._fn_fail,
+                  bg=theme.ERROR, fg=theme.BG_BASE,
+                  font=theme.FONT_SMALL,
+                  relief="flat", padx=8, pady=3,
+                  cursor="hand2").pack(side=tk.LEFT, padx=2)
+
+    def _fn_pass(self):
+        if hasattr(self, '_fn_btn_widget') and self._fn_btn_widget:
+            self._fn_btn_widget.configure(bg=theme.SUCCESS, fg=theme.BG_BASE)
+        self._pressed_keys.add("__fn__")
+        self._update_stats()
+
+    def _fn_fail(self):
+        if hasattr(self, '_fn_btn_widget') and self._fn_btn_widget:
+            self._fn_btn_widget.configure(bg=theme.ERROR, fg=theme.BG_BASE)
+        self._pressed_keys.add("__fn__")
         self._update_stats()
 
     # ── Layout ────────────────────────────────────────────────────────
@@ -183,8 +248,9 @@ class Step(BaseStep):
     def _build_keyboard(self):
         for w in self._kbd_frame.winfo_children():
             w.destroy()
-        self._key_buttons = {}
-        self._total_keys  = 0
+        self._key_buttons    = {}
+        self._total_keys     = 0
+        self._fn_btn_widget  = None
 
         rows = LAYOUTS[self._current_layout]["rows"]
         for row_idx, row in enumerate(rows):
@@ -215,6 +281,10 @@ class Step(BaseStep):
                         if alias not in self._key_buttons:
                             self._key_buttons[alias] = btn
                     self._total_keys += 1
+                else:
+                    # keysym is None → tecla Fn (hardware-level, no detectada automáticamente)
+                    self._fn_btn_widget = btn
+                    self._total_keys += 1
 
     def _build_legend(self):
         for w in self._legend_frame.winfo_children():
@@ -230,13 +300,23 @@ class Step(BaseStep):
     def on_enter(self):
         self._root().bind("<KeyPress>",   self._on_key_press)
         self._root().bind("<KeyRelease>", self._on_key_release)
+        self._root().bind("<Tab>",        self._on_key_press_tab)
         self._build_legend()
+        try:
+            self._install_win_hook()
+        except Exception:
+            pass
 
     def on_leave(self):
+        try:
+            self._remove_win_hook()
+        except Exception:
+            pass
         super().on_leave()
         try:
             self._root().unbind("<KeyPress>")
             self._root().unbind("<KeyRelease>")
+            self._root().unbind("<Tab>")
         except Exception:
             pass
 
@@ -255,17 +335,69 @@ class Step(BaseStep):
             btn.configure(bg=theme.SUCCESS, fg=theme.BG_BASE, relief="sunken")
         self._update_stats()
 
+    def _on_key_press_tab(self, event):
+        """Maneja Tab sin cambiar el foco entre widgets."""
+        self._on_key_press(event)
+        return "break"
+
     def _on_key_release(self, event):
         keysym = event.keysym
         btn = self._key_buttons.get(keysym)
         if btn and keysym in self._pressed_keys:
             btn.configure(bg=theme.SUCCESS, fg=theme.BG_BASE, relief="raised")
 
+    # ── Win key hook (Windows only) ────────────────────────────────────
+    def _install_win_hook(self):
+        """Instala hook de teclado de bajo nivel para suprimir la tecla Win."""
+        import ctypes, ctypes.wintypes, threading
+
+        WH_KEYBOARD_LL = 13
+        WM_KEYDOWN     = 0x0100
+        WM_SYSKEYDOWN  = 0x0104
+        VK_LWIN        = 0x5B
+        VK_RWIN        = 0x5C
+
+        HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int,
+                                       ctypes.wintypes.WPARAM,
+                                       ctypes.wintypes.LPARAM)
+
+        def low_level_handler(nCode, wParam, lParam):
+            if nCode >= 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                vk_code = ctypes.cast(lParam, ctypes.POINTER(ctypes.c_ulong))[0]
+                if vk_code in (VK_LWIN, VK_RWIN):
+                    return 1  # Suppress
+            return ctypes.windll.user32.CallNextHookEx(
+                self._win_hook, nCode, wParam, lParam)
+
+        self._hook_proc = HOOKPROC(low_level_handler)
+        self._win_hook  = ctypes.windll.user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL, self._hook_proc, None, 0)
+
+        # Process hook messages in separate thread
+        def msg_pump():
+            msg = ctypes.wintypes.MSG()
+            while self._hook_active:
+                ctypes.windll.user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+
+        self._hook_active = True
+        threading.Thread(target=msg_pump, daemon=True).start()
+
+    def _remove_win_hook(self):
+        self._hook_active = False
+        if hasattr(self, '_win_hook') and self._win_hook:
+            import ctypes
+            ctypes.windll.user32.UnhookWindowsHookEx(self._win_hook)
+            self._win_hook = None
+
+    # ── Reset ──────────────────────────────────────────────────────────
     def _reset(self):
         self._pressed_keys.clear()
         for btn in self._key_buttons.values():
             btn.configure(bg=theme.BG_SURFACE1,
                            fg=theme.TEXT_SECONDARY, relief="raised")
+        if hasattr(self, '_fn_btn_widget') and self._fn_btn_widget:
+            self._fn_btn_widget.configure(bg=theme.BG_SURFACE1,
+                                           fg=theme.TEXT_SECONDARY)
         self._update_stats()
         self.set_status("pending")
 
@@ -277,9 +409,17 @@ class Step(BaseStep):
             if btn:
                 hit_buttons.add(id(btn))
 
+        # Count Fn manual confirmation
+        if (hasattr(self, '_fn_btn_widget') and self._fn_btn_widget
+                and "__fn__" in self._pressed_keys):
+            hit_buttons.add(id(self._fn_btn_widget))
+
         unique_btns = set(id(b) for b in self._key_buttons.values())
-        pressed  = len(hit_buttons)
-        total    = len(unique_btns)
+        if hasattr(self, '_fn_btn_widget') and self._fn_btn_widget:
+            unique_btns.add(id(self._fn_btn_widget))
+
+        pressed   = len(hit_buttons)
+        total     = len(unique_btns)
         remaining = total - pressed
 
         self._pressed_lbl.configure(text=f"Presionadas: {pressed} / {total}")

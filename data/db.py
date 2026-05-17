@@ -6,7 +6,8 @@ import sqlite3
 import os
 import datetime
 
-DB_PATH = os.path.join(os.path.expanduser("~"), ".tecoqc", "inspections.db")
+from config import get_data_dir
+DB_PATH = os.path.join(get_data_dir(), "inspections.db")
 
 
 def _get_conn():
