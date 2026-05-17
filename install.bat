@@ -29,6 +29,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: Intentar instalar pythonnet (opcional, para temperaturas con LibreHardwareMonitor)
+:: No compatible con Python 3.14+, se omite si falla
+echo.
+echo Intentando instalar pythonnet (opcional para temperaturas)...
+pip install "pythonnet>=3.0.0" >nul 2>&1
+if errorlevel 1 (
+    echo AVISO: pythonnet no pudo instalarse con esta version de Python.
+    echo         Las temperaturas usaran metodos alternativos ^(WMI/OpenHardwareMonitor^).
+    echo         Esto es normal con Python 3.14+.
+) else (
+    echo pythonnet instalado correctamente.
+)
+
 echo.
 echo ============================================
 echo   Instalacion completada exitosamente.
