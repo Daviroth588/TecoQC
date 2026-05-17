@@ -92,10 +92,10 @@ class Step(BaseStep):
             insertbackground=theme.TEXT_PRIMARY,
         ).pack(fill=tk.X)
 
-        # Device serial
+        # Device serial / Teco Tag
         self._serial_entry = LabeledEntry(
-            inner, "Número de Serie del Equipo",
-            placeholder="Ej. SN123456789",
+            inner, "Teco Tag",
+            placeholder="Ej. TT-2024-001",
             bg=theme.BG_SURFACE0, width=35,
         )
         self._serial_entry.grid(row=2, column=0, padx=(0, 24), pady=8, sticky="ew")
@@ -175,7 +175,7 @@ class Step(BaseStep):
         if not serial:
             tk.messagebox.showwarning(
                 "Campos requeridos",
-                "Por favor ingrese el número de serie del equipo.",
+                "Por favor ingrese el Teco Tag del equipo.",
             )
             return
 
@@ -186,7 +186,7 @@ class Step(BaseStep):
         self._state["company"] = "Tecology"
 
         self.set_status(STATUS_PASSED,
-                        f"Técnico: {tech} | S/N: {serial}")
+                        f"Técnico: {tech} | Teco Tag: {serial}")
         if self._wizard:
             self._wizard.navigate_next()
 

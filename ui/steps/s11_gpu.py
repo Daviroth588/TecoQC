@@ -69,11 +69,27 @@ class Step(BaseStep):
                 )
 
         if wmi_gpus:
-            for i, gpu in enumerate(wmi_gpus):
+            real_idx = 0
+            for gpu in wmi_gpus:
                 if "error" in gpu:
                     continue
-                any_found = True
+                is_virtual = gpu.get("is_virtual", False)
                 vendor = gpu.get("vendor", "Desconocido")
+
+                if is_virtual:
+                    # Show as collapsed info-only row, not a full GPU card
+                    virt_row = tk.Frame(self._content, bg=theme.BG_SURFACE0,
+                                        highlightthickness=1,
+                                        highlightbackground=theme.BG_SURFACE2)
+                    virt_row.pack(fill=tk.X, pady=(4, 0))
+                    tk.Label(virt_row,
+                             text=f"⊘  {gpu.get('name', 'N/D')}  — adaptador virtual (excluido del diagnóstico)",
+                             bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                             font=theme.FONT_SMALL, padx=12, pady=6).pack(anchor="w")
+                    continue
+
+                real_idx += 1
+                any_found = True
                 color = (theme.SUCCESS if vendor == "NVIDIA"
                           else theme.WARNING if vendor == "AMD"
                           else theme.ACCENT_BLUE)
@@ -87,7 +103,7 @@ class Step(BaseStep):
 
                 self._make_gpu_card(
                     self._content,
-                    title=f"GPU {i+1} — {vendor} (WMI)",
+                    title=f"GPU {real_idx} — {vendor} (WMI)",
                     vendor_color=color,
                     fields=[
                         ("Nombre", gpu.get("name", "N/D")),

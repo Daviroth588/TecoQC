@@ -51,27 +51,57 @@ def get_nvidia_info():
     return info
 
 
+_VIRTUAL_GPU_KEYWORDS = [
+    "parsec", "virtual", "remote desktop", "microsoft basic display",
+    "teamviewer", "virtualbox", "vmware", "citrix", "indirect display",
+    "generic pnp", "display only", "moonlight", "sunshine",
+]
+
+
+def _is_virtual_adapter(name: str) -> bool:
+    n = name.lower()
+    return any(kw in n for kw in _VIRTUAL_GPU_KEYWORDS)
+
+
+def _gpu_priority(gpu: dict) -> int:
+    """Lower number = higher priority. Discrete > iGPU > virtual."""
+    if _is_virtual_adapter(gpu.get("name", "")):
+        return 99
+    v = gpu.get("vendor", "")
+    if v in ("NVIDIA", "AMD"):
+        return 0
+    if v == "Intel":
+        return 1
+    return 2
+
+
 def get_wmi_gpu_info():
-    """Obtiene info de GPU via WMI (funciona para AMD, Intel, NVIDIA)."""
+    """Obtiene info de GPU via WMI, filtrando adaptadores virtuales."""
     gpus = []
     try:
         import wmi
         c = wmi.WMI()
         adapters = c.Win32_VideoController()
         for a in adapters:
+            name = (a.Name or "Desconocido").strip()
             gpu = {
-                "name": (a.Name or "Desconocido").strip(),
+                "name": name,
                 "driver_version": (a.DriverVersion or "").strip(),
-                "vendor": _detect_vendor((a.Name or "")),
+                "vendor": _detect_vendor(name),
                 "vram_total_mb": _bytes_to_mb(a.AdapterRAM),
                 "status": (a.Status or "").strip(),
                 "video_mode": f"{a.CurrentHorizontalResolution or 0}x"
                               f"{a.CurrentVerticalResolution or 0} "
                               f"@{a.CurrentRefreshRate or 0}Hz",
+                "is_virtual": _is_virtual_adapter(name),
             }
             gpus.append(gpu)
     except Exception as e:
         gpus.append({"name": "Error", "error": str(e)})
+        return gpus
+
+    # Sort: discrete first, iGPU second, virtual last
+    gpus.sort(key=_gpu_priority)
     return gpus
 
 
