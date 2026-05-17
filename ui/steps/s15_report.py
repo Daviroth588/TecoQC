@@ -505,3 +505,164 @@ class Step(BaseStep):
         except Exception as e:
             from tkinter import messagebox
             messagebox.showerror("Error", f"No se pudo abrir el historial:\n{e}")
+
+    # ── Comparison with previous inspection ───────────────────────────
+    def _compare_with_previous(self):
+        serial = self._state.get("device_serial", "").strip()
+        if not serial:
+            from tkinter import messagebox
+            messagebox.showinfo("Sin S/N", "Sin S/N registrado para este dispositivo.")
+            return
+
+        self._compare_btn.configure(state=tk.DISABLED)
+
+        def fetch():
+            from data.db import init_db, get_inspections_by_serial, get_inspection_steps
+            init_db()
+            inspections = get_inspections_by_serial(serial)
+            # We want the most recent inspection that is already saved (not the current session).
+            # get_inspections_by_serial returns newest first; take the first one.
+            if not inspections:
+                return None
+            prev = inspections[0]
+            steps = get_inspection_steps(prev["id"])
+            return {"inspection": prev, "steps": steps}
+
+        def on_done(result):
+            self._compare_btn.configure(state=tk.NORMAL)
+            if result is None:
+                from tkinter import messagebox
+                messagebox.showinfo("Sin inspecciones previas",
+                                    f"Sin inspecciones previas para el S/N: {serial}")
+                return
+            self._show_comparison(result)
+
+        def on_error(error):
+            self._compare_btn.configure(state=tk.NORMAL)
+            from tkinter import messagebox
+            messagebox.showerror("Error", f"No se pudo obtener historial:\n{error}")
+
+        self.run_in_thread(fetch, on_done=on_done, on_error=on_error)
+
+    def _show_comparison(self, prev_data):
+        prev_insp = prev_data["inspection"]
+        prev_steps = prev_data["steps"]
+
+        # Build lookup: step_num -> status for the previous inspection
+        prev_by_step = {s["step_num"]: s for s in prev_steps}
+
+        # Current session results
+        current_results = self._state.get("step_results", {})
+
+        # ── Toplevel window ────────────────────────────────────────────
+        win = tk.Toplevel(self.winfo_toplevel())
+        win.title("Comparación con inspección anterior")
+        win.geometry("620x520")
+        win.configure(bg=theme.BG_BASE)
+        win.resizable(False, True)
+
+        # Header info
+        header = tk.Frame(win, bg=theme.BG_SURFACE0, padx=16, pady=10)
+        header.pack(fill=tk.X)
+
+        tk.Label(header, text="Comparación con inspección anterior",
+                 bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
+                 font=theme.FONT_H3).pack(anchor="w")
+
+        prev_date = prev_insp.get("date", prev_insp.get("created_at", "N/D"))
+        prev_tech = prev_insp.get("technician", "N/D")
+        serial_num = prev_insp.get("serial_number", "N/D")
+        tk.Label(header,
+                 text=f"S/N: {serial_num}  |  Fecha anterior: {prev_date}  |  Técnico: {prev_tech}",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_SMALL).pack(anchor="w", pady=(4, 0))
+
+        tk.Frame(win, height=1, bg=theme.BG_SURFACE2).pack(fill=tk.X)
+
+        # Scrollable table area
+        container = tk.Frame(win, bg=theme.BG_BASE)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(container, bg=theme.BG_BASE, highlightthickness=0)
+        scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=theme.BG_BASE)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Table header row
+        col_widths = [4, 22, 16, 16, 12]  # character widths
+        hdr_frame = tk.Frame(scrollable_frame, bg=theme.BG_SURFACE1)
+        hdr_frame.pack(fill=tk.X)
+        for text, cw in zip(["#", "Componente", "Anterior", "Actual", "Cambio"], col_widths):
+            tk.Label(hdr_frame, text=text, bg=theme.BG_SURFACE1, fg=theme.TEXT_MUTED,
+                     font=theme.FONT_SMALL, width=cw, anchor="w",
+                     padx=6, pady=6).pack(side=tk.LEFT)
+
+        # Table rows for steps 1-14
+        for step_num in range(1, 15):
+            name = STEP_NAMES.get(step_num, f"Paso {step_num}")
+
+            prev_step = prev_by_step.get(step_num, {})
+            prev_status = prev_step.get("status", STATUS_PENDING)
+
+            current_result = current_results.get(step_num, {})
+            current_status = current_result.get("status", STATUS_PENDING)
+
+            # Change indicator
+            if prev_status == STATUS_FAILED and current_status == STATUS_PASSED:
+                change_text = "↑ Mejoró"
+                change_fg = theme.SUCCESS
+            elif prev_status == STATUS_PASSED and current_status == STATUS_FAILED:
+                change_text = "↓ Empeoró"
+                change_fg = theme.ERROR
+            else:
+                change_text = "="
+                change_fg = theme.TEXT_MUTED
+
+            prev_icon = STATUS_ICON.get(prev_status, "●")
+            prev_label = STATUS_LABELS.get(prev_status, prev_status)
+            cur_icon = STATUS_ICON.get(current_status, "●")
+            cur_label = STATUS_LABELS.get(current_status, current_status)
+
+            bg = theme.BG_SURFACE0 if step_num % 2 == 1 else theme.BG_MANTLE
+
+            row_frame = tk.Frame(scrollable_frame, bg=bg)
+            row_frame.pack(fill=tk.X)
+
+            tk.Label(row_frame, text=f"{step_num:02d}", bg=bg,
+                     fg=theme.TEXT_MUTED, font=theme.FONT_SMALL,
+                     width=col_widths[0], padx=6, pady=5).pack(side=tk.LEFT)
+
+            tk.Label(row_frame, text=name, bg=bg,
+                     fg=theme.TEXT_PRIMARY, font=theme.FONT_BODY,
+                     width=col_widths[1], anchor="w", padx=4).pack(side=tk.LEFT)
+
+            tk.Label(row_frame, text=f"{prev_icon} {prev_label}", bg=bg,
+                     fg=STATUS_FG.get(prev_status, theme.TEXT_MUTED),
+                     font=theme.FONT_BODY, width=col_widths[2],
+                     anchor="w", padx=4).pack(side=tk.LEFT)
+
+            tk.Label(row_frame, text=f"{cur_icon} {cur_label}", bg=bg,
+                     fg=STATUS_FG.get(current_status, theme.TEXT_MUTED),
+                     font=theme.FONT_BODY, width=col_widths[3],
+                     anchor="w", padx=4).pack(side=tk.LEFT)
+
+            tk.Label(row_frame, text=change_text, bg=bg,
+                     fg=change_fg, font=theme.FONT_BODY_BOLD,
+                     width=col_widths[4], anchor="w", padx=4).pack(side=tk.LEFT)
+
+        # Close button
+        tk.Frame(win, height=1, bg=theme.BG_SURFACE2).pack(fill=tk.X)
+        footer = tk.Frame(win, bg=theme.BG_BASE, pady=10)
+        footer.pack(fill=tk.X)
+        tk.Button(footer, text="Cerrar", command=win.destroy,
+                  **theme.BTN_SECONDARY).pack(side=tk.RIGHT, padx=16)

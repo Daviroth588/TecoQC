@@ -185,6 +185,26 @@ class Step(BaseStep):
 
         self._make_card(grid, "Tarjeta Gráfica (GPU)", gpu_rows, row=2, col=0)
 
+        # Peripherals card (placeholder — filled by background thread)
+        periph_card = Card(grid)
+        periph_card.grid(row=2, column=1, padx=6, pady=6, sticky="nsew")
+
+        tk.Label(periph_card, text="Periféricos Especiales",
+                 bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
+                 font=theme.FONT_H3).pack(anchor="w", padx=16, pady=(12, 6))
+        tk.Frame(periph_card, height=1, bg=theme.BG_SURFACE2).pack(fill=tk.X, padx=16)
+
+        self._periph_spinner = Spinner(periph_card, text="Detectando periféricos...",
+                                        bg=theme.BG_SURFACE0)
+        self._periph_spinner.pack(padx=16, pady=8)
+        self._periph_spinner.start()
+
+        self._periph_frame = tk.Frame(periph_card, bg=theme.BG_SURFACE0)
+        self._periph_frame.pack(fill=tk.X, padx=16, pady=(0, 10))
+
+        self.run_in_thread(self._check_peripherals, on_done=self._show_peripherals,
+                            on_error=self._periph_error)
+
         # Cross-check serial number vs. Step 1 input
         cross_card = Card(self._cards_frame)
         cross_card.pack(fill=tk.X, pady=(12, 0))
@@ -327,6 +347,60 @@ class Step(BaseStep):
                 self._state["system_issues"].append(f"{total_issues} errores en Event Log")
             if driver_errors:
                 self._state["system_issues"].append(f"{len(driver_errors)} drivers con error")
+
+    def _check_peripherals(self):
+        from hardware.peripherals import get_all_peripherals
+        return get_all_peripherals()
+
+    def _show_peripherals(self, data):
+        self._periph_spinner.stop()
+        self._periph_spinner.pack_forget()
+
+        for w in self._periph_frame.winfo_children():
+            w.destroy()
+
+        sd = data.get("sd_reader", {})
+        touch = data.get("touchscreen", {})
+        fp = data.get("fingerprint", {})
+        ir = data.get("ir_camera", {})
+
+        def _periph_row(parent, label, found, name=""):
+            row = tk.Frame(parent, bg=theme.BG_SURFACE0)
+            row.pack(fill=tk.X, pady=2)
+            icon = "✓" if found else "✗"
+            fg = theme.SUCCESS if found else theme.TEXT_MUTED
+            tk.Label(row, text=label + ":", bg=theme.BG_SURFACE0,
+                     fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY,
+                     width=18, anchor="w").pack(side=tk.LEFT)
+            display = f"{icon}  {name}" if (found and name) else icon
+            tk.Label(row, text=display, bg=theme.BG_SURFACE0,
+                     fg=fg, font=theme.FONT_BODY_BOLD,
+                     anchor="w").pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        _periph_row(self._periph_frame, "Lector SD",
+                    sd.get("found", False), sd.get("name", ""))
+
+        touch_found = touch.get("found", False)
+        touch_name = touch.get("devices", [""])[0] if touch_found else ""
+        _periph_row(self._periph_frame, "Pantalla táctil",
+                    touch_found, touch_name)
+
+        _periph_row(self._periph_frame, "Lector de huellas",
+                    fp.get("found", False), fp.get("name", ""))
+
+        _periph_row(self._periph_frame, "Cámara IR",
+                    ir.get("found", False), ir.get("name", ""))
+
+    def _periph_error(self, error):
+        try:
+            self._periph_spinner.stop()
+            self._periph_spinner.pack_forget()
+            tk.Label(self._periph_frame,
+                     text=f"Error al detectar periféricos: {error}",
+                     bg=theme.BG_SURFACE0, fg=theme.WARNING,
+                     font=theme.FONT_SMALL).pack(anchor="w")
+        except Exception:
+            pass
 
     def _make_card(self, grid, title, rows, row, col):
         card = Card(grid)
