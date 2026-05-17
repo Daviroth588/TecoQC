@@ -166,3 +166,121 @@ def _parse_capabilities(caps):
         return [capability_names.get(c, str(c)) for c in caps]
     except Exception:
         return []
+
+
+def get_smart_detailed():
+    """
+    Obtiene atributos SMART detallados via wmic y PowerShell.
+    Retorna lista de discos con atributos críticos interpretados.
+    """
+    results = []
+
+    # Try wmic for basic SMART status with more fields
+    try:
+        proc = subprocess.run(
+            ["wmic", "diskdrive", "get",
+             "Caption,Status,Size,InterfaceType,Availability,StatusInfo",
+             "/format:csv"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode == 0:
+            lines = [l.strip() for l in proc.stdout.strip().splitlines()
+                     if l.strip() and l.strip() != "Node"]
+            header = None
+            for line in lines:
+                parts = line.split(",")
+                if not header:
+                    header = [p.strip() for p in parts]
+                    continue
+                if len(parts) < len(header):
+                    continue
+                row = dict(zip(header, [p.strip() for p in parts]))
+                status = row.get("Status", "")
+                availability = row.get("Availability", "0")
+                status_info = row.get("StatusInfo", "0")
+                size_bytes = int(row.get("Size", 0) or 0)
+
+                health = "OK" if status.upper() == "OK" else status
+                issues = []
+                if status.upper() not in ("OK", ""):
+                    issues.append(f"Estado SMART: {status}")
+                try:
+                    avail_int = int(availability)
+                    if avail_int not in (0, 3):
+                        issues.append(f"Disponibilidad: {_availability_desc(avail_int)}")
+                except Exception:
+                    pass
+
+                results.append({
+                    "model": row.get("Caption", "N/D").strip(),
+                    "size_gb": round(size_bytes / (1024**3), 1),
+                    "interface": row.get("InterfaceType", "N/D").strip(),
+                    "smart_status": health,
+                    "issues": issues,
+                    "overall_ok": len(issues) == 0 and status.upper() == "OK",
+                })
+    except Exception as e:
+        results.append({"error": str(e)})
+
+    # Try PowerShell Get-PhysicalDisk for SSD wear
+    try:
+        ps_cmd = (
+            "Get-PhysicalDisk | Select-Object FriendlyName,MediaType,"
+            "HealthStatus,OperationalStatus,Size,"
+            "AllocatedSize | ConvertTo-Json -Depth 2"
+        )
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            import json
+            raw = proc.stdout.strip()
+            if raw.startswith("{"):
+                raw = f"[{raw}]"
+            disks = json.loads(raw)
+            if isinstance(disks, dict):
+                disks = [disks]
+            for d in disks:
+                health = str(d.get("HealthStatus", ""))
+                media = str(d.get("MediaType", ""))
+                name = str(d.get("FriendlyName", "N/D"))
+                op_status = str(d.get("OperationalStatus", ""))
+                size_b = int(d.get("Size", 0) or 0)
+
+                # Find or update matching result
+                matched = next(
+                    (r for r in results if name[:20] in r.get("model", "")[:20]), None)
+                if matched:
+                    matched["media_type_ps"] = media
+                    matched["health_ps"] = health
+                    if health.lower() not in ("healthy", ""):
+                        matched["issues"].append(f"Salud: {health}")
+                        matched["overall_ok"] = False
+                else:
+                    results.append({
+                        "model": name,
+                        "size_gb": round(size_b / (1024**3), 1),
+                        "interface": "N/D",
+                        "smart_status": health,
+                        "media_type_ps": media,
+                        "issues": [] if health.lower() == "healthy" else [f"Salud: {health}"],
+                        "overall_ok": health.lower() == "healthy",
+                    })
+    except Exception:
+        pass
+
+    return results
+
+
+def _availability_desc(code):
+    descriptions = {
+        1: "Otro", 2: "Desconocido", 3: "Running/Full Power",
+        4: "Warning", 5: "In Test", 6: "Not Applicable",
+        7: "Power Off", 8: "Off Line", 9: "Off Duty",
+        10: "Degraded", 11: "Not Installed",
+        12: "Install Error", 13: "Power Save-Unknown",
+        14: "Power Save-Low Power", 15: "Power Save-Standby",
+        16: "Power Cycle", 17: "Power Save-Warning",
+    }
+    return descriptions.get(code, f"Código {code}")

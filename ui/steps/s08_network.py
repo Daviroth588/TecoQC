@@ -137,6 +137,29 @@ class Step(BaseStep):
         self._dns_ok = None
         self._dl_ok = None
 
+        # ── Bluetooth section ──────────────────────────────────────────
+        bt_card = Card(parent)
+        bt_card.pack(fill=tk.X, pady=(0, 8))
+
+        bt_hdr = tk.Frame(bt_card, bg=theme.BG_SURFACE0)
+        bt_hdr.pack(fill=tk.X, padx=16, pady=(10, 6))
+        tk.Label(bt_hdr, text="Bluetooth",
+                 bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
+                 font=theme.FONT_H3).pack(side=tk.LEFT)
+        tk.Button(bt_hdr, text="🔍 Detectar",
+                   command=self._detect_bluetooth, **theme.BTN_NEUTRAL).pack(side=tk.RIGHT)
+
+        self._bt_spinner = Spinner(bt_card, text="Detectando Bluetooth...",
+                                    bg=theme.BG_SURFACE0)
+
+        self._bt_frame = tk.Frame(bt_card, bg=theme.BG_SURFACE0)
+        self._bt_frame.pack(fill=tk.X, padx=16, pady=(0, 10))
+
+        tk.Label(self._bt_frame,
+                 text="Haga clic en 'Detectar' para escanear el adaptador Bluetooth.",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                 font=theme.FONT_SMALL).pack(anchor="w")
+
     def on_enter(self):
         self._scan_wifi()
 
@@ -409,3 +432,82 @@ class Step(BaseStep):
         elif len(done) > 0:
             passed_cnt = sum(1 for x in done if x)
             self._set_detail(f"{passed_cnt}/{len(done)} pruebas OK")
+
+    # ── Bluetooth ──────────────────────────────────────────────────────
+    def _detect_bluetooth(self):
+        for w in self._bt_frame.winfo_children():
+            w.destroy()
+        self._bt_spinner.pack(padx=16, pady=4)
+        self._bt_spinner.start()
+        self.run_in_thread(self._do_bluetooth, on_done=self._show_bluetooth,
+                            on_error=lambda e: self._bt_error(e))
+
+    def _do_bluetooth(self):
+        from hardware.bluetooth import get_bluetooth_info
+        return get_bluetooth_info()
+
+    def _show_bluetooth(self, data):
+        self._bt_spinner.stop()
+        self._bt_spinner.pack_forget()
+
+        for w in self._bt_frame.winfo_children():
+            w.destroy()
+
+        adapters = data.get("adapters", [])
+        enabled = data.get("enabled", False)
+        error = data.get("error")
+
+        if error and not adapters:
+            tk.Label(self._bt_frame, text=f"⚠ Error WMI: {error}",
+                     bg=theme.BG_SURFACE0, fg=theme.WARNING,
+                     font=theme.FONT_SMALL).pack(anchor="w")
+            return
+
+        if not adapters:
+            tk.Label(self._bt_frame,
+                     text="⚠ No se detectaron adaptadores Bluetooth.\n"
+                          "Verifique que el controlador esté instalado.",
+                     bg=theme.BG_SURFACE0, fg=theme.WARNING,
+                     font=theme.FONT_BODY).pack(anchor="w")
+            return
+
+        # Status row
+        status_txt = "✓ Bluetooth activo" if enabled else "⚠ Bluetooth detectado pero inactivo"
+        status_fg = theme.SUCCESS if enabled else theme.WARNING
+        tk.Label(self._bt_frame, text=status_txt,
+                 bg=theme.BG_SURFACE0, fg=status_fg,
+                 font=theme.FONT_BODY_BOLD).pack(anchor="w", pady=(0, 6))
+
+        # Adapter list
+        for a in adapters[:3]:
+            row = tk.Frame(self._bt_frame, bg=theme.BG_SURFACE0)
+            row.pack(fill=tk.X, pady=1)
+            status = a.get("status", "")
+            fg = theme.SUCCESS if status.upper() == "OK" else theme.WARNING
+            tk.Label(row, text=f"● {a.get('name', 'N/D')[:50]}",
+                     bg=theme.BG_SURFACE0, fg=theme.TEXT_PRIMARY,
+                     font=theme.FONT_SMALL).pack(side=tk.LEFT)
+            tk.Label(row, text=f" [{status}]",
+                     bg=theme.BG_SURFACE0, fg=fg,
+                     font=theme.FONT_SMALL).pack(side=tk.LEFT, padx=4)
+            mfg = a.get("manufacturer", "")
+            if mfg:
+                tk.Label(row, text=f"— {mfg[:30]}",
+                         bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                         font=theme.FONT_SMALL).pack(side=tk.LEFT)
+
+        paired = data.get("paired_devices", [])
+        if paired:
+            tk.Label(self._bt_frame,
+                     text=f"Dispositivos emparejados: {len(paired)}",
+                     bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                     font=theme.FONT_SMALL).pack(anchor="w", pady=(4, 0))
+
+    def _bt_error(self, error):
+        self._bt_spinner.stop()
+        self._bt_spinner.pack_forget()
+        for w in self._bt_frame.winfo_children():
+            w.destroy()
+        tk.Label(self._bt_frame, text=f"Error Bluetooth: {error}",
+                 bg=theme.BG_SURFACE0, fg=theme.WARNING,
+                 font=theme.FONT_SMALL).pack(anchor="w")

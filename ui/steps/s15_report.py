@@ -122,7 +122,13 @@ class Step(BaseStep):
             btn_row, text="📋  Generar Reporte HTML",
             command=self._generate_report, **theme.BTN_PRIMARY,
         )
-        self._gen_btn.pack(side=tk.LEFT, padx=(0, 12))
+        self._gen_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._history_btn = tk.Button(
+            btn_row, text="📊  Ver Historial",
+            command=self._open_history, **theme.BTN_SECONDARY,
+        )
+        self._history_btn.pack(side=tk.LEFT, padx=(0, 12))
 
         self._open_btn = tk.Button(
             btn_row, text="🌐  Abrir en navegador",
@@ -270,6 +276,18 @@ class Step(BaseStep):
         self._report_status_lbl.configure(
             text=f"✓ Reporte guardado:\n{path}", fg=theme.SUCCESS)
         self.set_status(STATUS_PASSED, f"Reporte generado: {os.path.basename(path)}")
+        # Auto-save to database
+        try:
+            from data.db import init_db, save_inspection
+            init_db()
+            notes = self._final_notes_entry.get().strip() if hasattr(self, "_final_notes_entry") else ""
+            self._state["final_notes"] = notes
+            db_id = save_inspection(self._state)
+            current_text = self._report_status_lbl.cget("text")
+            self._report_status_lbl.configure(
+                text=current_text + f"\n✓ Guardado en historial (ID #{db_id})")
+        except Exception:
+            pass
 
     def _report_error(self, error):
         self._gen_btn.configure(state=tk.NORMAL)
@@ -471,3 +489,12 @@ class Step(BaseStep):
         self._pdf_btn.configure(state=tk.NORMAL)
         self._report_status_lbl.configure(
             text=f"✗ Error al generar PDF: {error}", fg=theme.ERROR)
+
+    def _open_history(self):
+        try:
+            from ui.history_window import HistoryWindow
+            win = HistoryWindow(self.winfo_toplevel())
+            win.focus_force()
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Error", f"No se pudo abrir el historial:\n{e}")

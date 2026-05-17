@@ -16,6 +16,41 @@ from config import APP_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT
 from ui.wizard_manager import WizardManager
 
 
+def _check_session_recovery(root):
+    """Si hay una sesión guardada, ofrece restaurarla."""
+    import json
+    from tkinter import messagebox
+    session_path = os.path.join(os.path.expanduser("~"), ".tecoqc", "session.json")
+    if not os.path.exists(session_path):
+        return
+    try:
+        with open(session_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        if not saved.get("technician_name") and not saved.get("device_serial"):
+            os.remove(session_path)
+            return
+        tech = saved.get("technician_name", "?")
+        serial = saved.get("device_serial", "?")
+        date = saved.get("report_date", "?")
+        if messagebox.askyesno(
+            "Sesión anterior encontrada",
+            f"Se encontró una sesión guardada:\n\n"
+            f"Técnico: {tech}\nS/N: {serial}\nFecha: {date}\n\n"
+            "¿Desea continuar desde donde dejó?",
+            icon="question"
+        ):
+            # Session will be loaded after WizardManager init
+            root._saved_session = saved
+        else:
+            os.remove(session_path)
+            root._saved_session = None
+    except Exception:
+        try:
+            os.remove(session_path)
+        except Exception:
+            pass
+
+
 def main():
     root = tk.Tk()
     root.title(APP_TITLE)
@@ -52,9 +87,26 @@ def main():
 
     root.protocol("WM_DELETE_WINDOW", on_close)
 
+    # Check for unfinished session
+    _check_session_recovery(root)
+
     # Build the main wizard UI
     app = WizardManager(root)
     app.pack(fill=tk.BOTH, expand=True)
+
+    # Auto-save session state every 30s
+    def _autosave():
+        try:
+            import json
+            session_path = os.path.join(os.path.expanduser("~"), ".tecoqc", "session.json")
+            os.makedirs(os.path.dirname(session_path), exist_ok=True)
+            with open(session_path, "w", encoding="utf-8") as f:
+                json.dump(app._state, f, ensure_ascii=False, default=str)
+        except Exception:
+            pass
+        root.after(30000, _autosave)
+
+    root.after(30000, _autosave)
 
     root.mainloop()
 

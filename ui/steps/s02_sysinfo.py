@@ -225,6 +225,10 @@ class Step(BaseStep):
                      bg=theme.BG_SURFACE0, fg=theme.WARNING,
                      font=theme.FONT_SMALL).pack(anchor="w", pady=(2, 0))
 
+        # Launch background checks for Event Log and Drivers
+        self.run_in_thread(self._check_eventlog_drivers,
+                            on_done=self._show_eventlog_drivers)
+
         self.set_status(STATUS_PASSED, "Sistema analizado")
         self._set_detail(
             f"{os_data.get('product_name', os_data.get('os_full', 'N/D'))} | "
@@ -237,6 +241,92 @@ class Step(BaseStep):
         self._spinner.configure(text=f"Error al recopilar información: {error}",
                                   fg=theme.ERROR)
         self.set_status(STATUS_FAILED, str(error))
+
+    def _check_eventlog_drivers(self):
+        from hardware.eventlog import scan_hardware_events, get_driver_errors_wmi
+        events = scan_hardware_events(days=30)
+        drivers = get_driver_errors_wmi()
+        return {"events": events, "drivers": drivers}
+
+    def _show_eventlog_drivers(self, data):
+        events = data.get("events", {})
+        drivers = data.get("drivers", [])
+        summary = events.get("summary", {})
+        total_issues = summary.get("total_issues", 0)
+        driver_errors = [d for d in drivers if "error" not in d]
+
+        # Find or create the diagnostic card
+        diag_card = Card(self._cards_frame)
+        diag_card.pack(fill=tk.X, pady=(8, 0))
+
+        tk.Label(diag_card, text="Diagnóstico del Sistema",
+                 bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
+                 font=theme.FONT_H3).pack(anchor="w", padx=16, pady=(12, 6))
+        tk.Frame(diag_card, height=1, bg=theme.BG_SURFACE2).pack(fill=tk.X, padx=16)
+
+        inner = tk.Frame(diag_card, bg=theme.BG_SURFACE0)
+        inner.pack(fill=tk.X, padx=16, pady=10)
+
+        # Event log summary
+        if total_issues == 0:
+            tk.Label(inner,
+                     text=f"✓ Event Log: sin errores de hardware en los últimos 30 días",
+                     bg=theme.BG_SURFACE0, fg=theme.SUCCESS,
+                     font=theme.FONT_BODY).pack(anchor="w")
+        else:
+            disk_c   = summary.get("disk_error_count", 0)
+            mem_c    = summary.get("memory_error_count", 0)
+            drv_c    = summary.get("driver_error_count", 0)
+            crit_c   = summary.get("critical_error_count", 0)
+            msg = f"⚠ Event Log ({summary.get('days_scanned', 30)} días): "
+            parts = []
+            if disk_c:   parts.append(f"{disk_c} errores de disco")
+            if mem_c:    parts.append(f"{mem_c} errores de memoria")
+            if drv_c:    parts.append(f"{drv_c} errores de driver")
+            if crit_c:   parts.append(f"{crit_c} críticos")
+            tk.Label(inner,
+                     text=msg + " | ".join(parts),
+                     bg=theme.BG_SURFACE0, fg=theme.WARNING,
+                     font=theme.FONT_BODY).pack(anchor="w")
+
+            # Show first few events
+            all_ev = (events.get("disk_errors", []) +
+                      events.get("memory_errors", []) +
+                      events.get("driver_errors", []) +
+                      events.get("critical_errors", []))
+            for ev in all_ev[:3]:
+                msg_short = ev.get("message", "")[:80]
+                t = ev.get("time", "")[:16]
+                tk.Label(inner,
+                         text=f"  [{t}] {msg_short}",
+                         bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                         font=theme.FONT_SMALL).pack(anchor="w")
+
+        # Driver errors
+        if not driver_errors:
+            tk.Label(inner,
+                     text="✓ Controladores: todos los dispositivos funcionan correctamente",
+                     bg=theme.BG_SURFACE0, fg=theme.SUCCESS,
+                     font=theme.FONT_BODY).pack(anchor="w", pady=(4, 0))
+        else:
+            tk.Label(inner,
+                     text=f"⚠ Controladores con error: {len(driver_errors)} dispositivo(s)",
+                     bg=theme.BG_SURFACE0, fg=theme.ERROR,
+                     font=theme.FONT_BODY).pack(anchor="w", pady=(4, 0))
+            for d in driver_errors[:4]:
+                tk.Label(inner,
+                         text=f"  ✗ {d.get('name', '?')[:45]} — {d.get('description', '')[:50]}",
+                         bg=theme.BG_SURFACE0, fg=theme.WARNING,
+                         font=theme.FONT_SMALL).pack(anchor="w")
+
+        # Update step status if issues found
+        if total_issues > 0 or driver_errors:
+            issue_count = total_issues + len(driver_errors)
+            self._state.setdefault("system_issues", [])
+            if total_issues:
+                self._state["system_issues"].append(f"{total_issues} errores en Event Log")
+            if driver_errors:
+                self._state["system_issues"].append(f"{len(driver_errors)} drivers con error")
 
     def _make_card(self, grid, title, rows, row, col):
         card = Card(grid)

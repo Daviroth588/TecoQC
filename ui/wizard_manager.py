@@ -45,7 +45,8 @@ class WizardManager(tk.Frame):
         # Navigation bar at bottom
         self._nav = _NavBar(right, on_prev=self._go_prev,
                              on_skip=self._go_skip,
-                             on_next=self._go_next)
+                             on_next=self._go_next,
+                             on_autorun=self._start_autorun)
         self._nav.pack(fill=tk.X, side=tk.BOTTOM)
 
         # Progress label in nav
@@ -184,6 +185,143 @@ class WizardManager(tk.Frame):
 
     def navigate_prev(self):
         self._go_prev()
+
+    # ── Auto-run ────────────────────────────────────────────────────────
+
+    def _start_autorun(self):
+        """Muestra el diálogo de auto-scan y ejecuta los tests automatizables."""
+        import threading
+
+        # Steps that can be auto-tested (have auto_run method or are info-only)
+        AUTO_STEPS = {2, 8, 10, 11, 12, 13}   # system, network, cpu, gpu, ram, storage
+        MANUAL_STEPS = {3, 4, 5, 6, 7, 9}     # keyboard, trackpad, display, camera, usb, audio
+        INFO_STEPS = {1, 2}                    # always auto-pass
+
+        # Show overlay
+        overlay = tk.Toplevel(self)
+        overlay.title("⚡ Diagnóstico Automático")
+        overlay.geometry("520x420")
+        overlay.configure(bg=theme.BG_BASE)
+        overlay.resizable(False, False)
+        overlay.grab_set()
+
+        tk.Label(overlay, text="⚡ Diagnóstico Automático",
+                 bg=theme.BG_BASE, fg=theme.ACCENT_BLUE,
+                 font=theme.FONT_H2).pack(pady=(20, 4))
+
+        tk.Label(overlay,
+                 text="Ejecuta tests automáticos en todos los pasos que no requieren\n"
+                      "intervención manual. Los pasos manuales se marcarán como 'Omitido'.",
+                 bg=theme.BG_BASE, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_BODY, justify="center").pack(pady=(0, 16))
+
+        # Step checklist
+        check_frame = tk.Frame(overlay, bg=theme.BG_SURFACE0,
+                                highlightthickness=1,
+                                highlightbackground=theme.BG_SURFACE1)
+        check_frame.pack(fill=tk.X, padx=24, pady=(0, 12))
+
+        step_vars = {}
+        for step_num, title, _ in self._steps:
+            if step_num == 15:
+                continue
+            var = tk.BooleanVar(value=step_num in AUTO_STEPS)
+            row = tk.Frame(check_frame, bg=theme.BG_SURFACE0)
+            row.pack(fill=tk.X, padx=12, pady=2)
+            is_auto = step_num in AUTO_STEPS
+            is_manual = step_num in MANUAL_STEPS
+            tag = " (automático)" if is_auto else " (manual — se omitirá)"
+            fg = theme.TEXT_PRIMARY if is_auto else theme.TEXT_MUTED
+            tk.Checkbutton(row, text=f"{step_num:02d} — {title}{tag}",
+                           variable=var,
+                           bg=theme.BG_SURFACE0, fg=fg,
+                           selectcolor=theme.BG_SURFACE1,
+                           activebackground=theme.BG_SURFACE0,
+                           font=theme.FONT_SMALL,
+                           state=tk.NORMAL if is_auto else tk.DISABLED).pack(anchor="w")
+            step_vars[step_num] = var
+
+        # Progress label
+        prog_lbl = tk.Label(overlay, text="",
+                             bg=theme.BG_BASE, fg=theme.TEXT_SECONDARY,
+                             font=theme.FONT_BODY)
+        prog_lbl.pack(pady=(0, 8))
+
+        # Progress bar
+        prog_canvas = tk.Canvas(overlay, height=8, bg=theme.BG_SURFACE1,
+                                 highlightthickness=0)
+        prog_canvas.pack(fill=tk.X, padx=24, pady=(0, 12))
+
+        # Buttons
+        btn_row = tk.Frame(overlay, bg=theme.BG_BASE)
+        btn_row.pack(pady=(0, 16))
+
+        cancel_flag = [False]
+
+        def cancel():
+            cancel_flag[0] = True
+            overlay.destroy()
+
+        start_btn = tk.Button(btn_row, text="⚡  Iniciar",
+                               command=lambda: run_auto(),
+                               **theme.BTN_PRIMARY)
+        start_btn.pack(side=tk.LEFT, padx=8)
+        tk.Button(btn_row, text="Cancelar",
+                   command=cancel,
+                   **theme.BTN_SECONDARY).pack(side=tk.LEFT, padx=8)
+
+        def draw_progress(pct):
+            w = prog_canvas.winfo_width() or 472
+            prog_canvas.delete("all")
+            prog_canvas.create_rectangle(0, 0, w, 8, fill=theme.BG_SURFACE1, outline="")
+            fw = int(w * pct)
+            if fw > 0:
+                prog_canvas.create_rectangle(0, 0, fw, 8, fill=theme.ACCENT_BLUE, outline="")
+
+        def run_auto():
+            start_btn.configure(state=tk.DISABLED)
+            steps_to_run = [s for s in self._steps
+                            if s[0] != 15 and step_vars.get(s[0], tk.BooleanVar()).get()]
+            total = len(steps_to_run)
+
+            def execute():
+                for i, (step_num, title, module_name) in enumerate(steps_to_run):
+                    if cancel_flag[0]:
+                        break
+
+                    def update_ui(n=step_num, t=title, idx=i, tot=total):
+                        prog_lbl.configure(
+                            text=f"Paso {idx+1}/{tot}: {t}...",
+                            fg=theme.ACCENT_BLUE)
+                        draw_progress((idx + 0.5) / tot)
+                        # Navigate to step
+                        self._goto_step(self._steps.index(
+                            next(s for s in self._steps if s[0] == n)))
+
+                    overlay.after(0, update_ui)
+                    import time
+                    time.sleep(0.3)
+
+                    # Load step and trigger on_enter
+                    frame = self._load_step(
+                        self._steps.index(next(s for s in self._steps if s[0] == step_num))
+                    )
+                    overlay.after(0, lambda f=frame: f.on_enter() if hasattr(f, 'on_enter') else None)
+
+                    # For manual steps, mark as skipped
+                    if step_num in MANUAL_STEPS:
+                        overlay.after(100, lambda n=step_num: self.set_step_status(n, 'skipped'))
+                    else:
+                        time.sleep(2.5)  # Wait for auto tests to start
+
+                if not cancel_flag[0]:
+                    overlay.after(0, lambda: prog_lbl.configure(
+                        text="✓ Diagnóstico automático completado",
+                        fg=theme.SUCCESS))
+                    overlay.after(0, lambda: draw_progress(1.0))
+                    overlay.after(2000, overlay.destroy)
+
+            threading.Thread(target=execute, daemon=True).start()
 
 
 # ── Sidebar ─────────────────────────────────────────────────────────────
@@ -324,7 +462,7 @@ class _Sidebar(tk.Frame):
 class _NavBar(tk.Frame):
     """Barra de navegación inferior con botones Anterior / Omitir / Siguiente."""
 
-    def __init__(self, parent, on_prev=None, on_skip=None, on_next=None):
+    def __init__(self, parent, on_prev=None, on_skip=None, on_next=None, on_autorun=None):
         super().__init__(parent, bg=theme.BG_MANTLE,
                           highlightthickness=1,
                           highlightbackground=theme.BG_SURFACE2)
@@ -341,6 +479,18 @@ class _NavBar(tk.Frame):
             font=theme.FONT_SMALL,
         )
         self._progress_lbl.pack(side=tk.LEFT, padx=16, pady=10)
+
+        # Auto-run button on left side
+        if on_autorun:
+            tk.Button(
+                self, text="⚡ Auto-scan",
+                command=on_autorun,
+                bg=theme.INFO, fg=theme.BG_BASE,
+                font=theme.FONT_BODY_BOLD, relief="flat",
+                cursor="hand2", padx=12, pady=6,
+                activebackground="#00b8ad",
+                activeforeground=theme.BG_BASE,
+            ).pack(side=tk.LEFT, padx=(0, 8), pady=8)
 
         # Right buttons
         btn_frame = tk.Frame(self, bg=theme.BG_MANTLE)
