@@ -1,0 +1,15 @@
+Para habilitar lectura de temperatura de CPU (igual que HWMonitor):
+
+1. Ir a: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases
+2. Descargar la ultima version (LibreHardwareMonitor-net472.zip o similar)
+3. Extraer el archivo
+4. Copiar "LibreHardwareMonitor.dll" a esta carpeta (assets/)
+5. Ejecutar install.bat para instalar pythonnet:
+      pip install pythonnet
+6. Ejecutar build.bat para compilar el ejecutable
+
+IMPORTANTE: TecoQC debe ejecutarse como Administrador para leer temperaturas.
+El ejecutable compilado con build.bat lo pedira automaticamente al iniciar.
+Al correr con python main.py, Windows mostrara el dialogo UAC al abrir.
+
+Sin el DLL, TecoQC sigue funcionando pero mostrara "N/D" en temperatura.

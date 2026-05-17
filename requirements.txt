@@ -3,6 +3,7 @@ WMI>=1.5.1
 Pillow>=10.0.0
 pywin32>=306
 reportlab>=4.0.0
+pythonnet>=3.0.0
 
 # Camera live preview
 opencv-python>=4.8.0
