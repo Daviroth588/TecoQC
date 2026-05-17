@@ -56,7 +56,9 @@ STATUS_ICONS = {
 }
 
 # Ping host for network test
-PING_HOST = "8.8.8.8"
+PING_HOST          = "8.8.8.8"
+PING_FALLBACK_HOST = "1.1.1.1"
+PING_MAX_MS        = 50       # ms — threshold for PASSED
 
 # Temperature thresholds (°C)
 TEMP_WARNING  = 75
@@ -65,3 +67,16 @@ TEMP_CRITICAL = 85
 # Audio test tone
 AUDIO_FREQUENCY = 440   # Hz
 AUDIO_DURATION  = 1000  # ms
+
+# Camera thresholds
+CAMERA_MIN_WIDTH  = 640
+CAMERA_MIN_HEIGHT = 480
+CAMERA_MIN_FPS    = 15
+
+# Disk speed thresholds (MB/s)
+DISK_SPEED_HDD_MIN_MB_S = 50
+DISK_SPEED_SSD_MIN_MB_S = 150
+DISK_IOPS_4K_MIN        = 500   # IOPS mínimas en bloques de 4 KB
+
+# Network speed threshold
+NET_DOWNLOAD_MIN_MB_S = 0.5

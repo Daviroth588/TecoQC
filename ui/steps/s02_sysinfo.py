@@ -19,7 +19,6 @@ class Step(BaseStep):
     def build_ui(self, parent):
         self._parent = parent
 
-        # Spinner while loading
         self._spinner = Spinner(parent, text="Recopilando información del sistema...",
                                  bg=theme.BG_BASE)
         self._spinner.pack(pady=40)
@@ -34,7 +33,8 @@ class Step(BaseStep):
 
     def _collect(self):
         import platform
-        info = {"os": {}, "motherboard": {}, "bios": {}, "cpu": {}, "memory": {}, "gpu": []}
+        info = {"os": {}, "motherboard": {}, "bios": {}, "cpu": {}, "memory": {}, "gpu": [],
+                "secure_boot": None, "tpm": {}}
         try:
             from hardware.system_info import get_all_system_info
             sys_data = get_all_system_info()
@@ -56,7 +56,41 @@ class Step(BaseStep):
             info["gpu"] = get_wmi_gpu_info()
         except Exception:
             pass
-        # Also grab OS info via platform as fallback
+
+        # Secure Boot via registry
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["reg", "query",
+                 r"HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State",
+                 "/v", "UEFISecureBootEnabled"],
+                capture_output=True, text=True, timeout=5
+            )
+            if "0x1" in result.stdout:
+                info["secure_boot"] = True
+            elif "0x0" in result.stdout:
+                info["secure_boot"] = False
+        except Exception:
+            pass
+
+        # TPM via WMI
+        try:
+            import wmi
+            c = wmi.WMI(namespace=r"root\CIMv2\Security\MicrosoftTpm")
+            tpms = c.Win32_Tpm()
+            if tpms:
+                t = tpms[0]
+                info["tpm"] = {
+                    "present": True,
+                    "activated": bool(getattr(t, "IsActivated_InitialValue", False)),
+                    "enabled": bool(getattr(t, "IsEnabled_InitialValue", False)),
+                    "spec_version": getattr(t, "SpecVersion", "N/D") or "N/D",
+                }
+            else:
+                info["tpm"] = {"present": False}
+        except Exception:
+            info["tpm"] = {"present": None}
+
         info.setdefault("os", {})
         info["os"].setdefault("os_full", f"{platform.system()} {platform.release()}")
         info["os"].setdefault("architecture", platform.machine())
@@ -69,13 +103,14 @@ class Step(BaseStep):
 
         self._state["system_info"] = info
 
-        # OS card
         os_data = info.get("os", {})
         mb_data = info.get("motherboard", {})
         bios_data = info.get("bios", {})
         cpu_data = info.get("cpu", {})
         mem_data = info.get("memory", {})
         gpu_list = info.get("gpu", [])
+        secure_boot = info.get("secure_boot")
+        tpm = info.get("tpm", {})
 
         grid = tk.Frame(self._cards_frame, bg=theme.BG_BASE)
         grid.pack(fill=tk.BOTH, expand=True)
@@ -83,6 +118,10 @@ class Step(BaseStep):
         grid.columnconfigure(1, weight=1)
 
         # OS Card
+        sb_text = ("Activo ✓" if secure_boot is True
+                   else "Inactivo ⚠" if secure_boot is False
+                   else "N/D")
+        sb_color = theme.SUCCESS if secure_boot else theme.WARNING if secure_boot is False else theme.TEXT_MUTED
         self._make_card(grid, "Sistema Operativo", [
             ("OS", os_data.get("product_name", os_data.get("os_full", "N/D"))),
             ("Versión", str(os_data.get("os_version", "N/D"))[:60]),
@@ -92,14 +131,21 @@ class Step(BaseStep):
             ("Hostname", os_data.get("hostname", "N/D")),
         ], row=0, col=0)
 
-        # Motherboard / Hardware card
-        self._make_card(grid, "Placa Base y Hardware", [
+        # Motherboard / Hardware card with Secure Boot + TPM
+        tpm_present = tpm.get("present")
+        tpm_ver = tpm.get("spec_version", "N/D")
+        tpm_text = (f"TPM {tpm_ver} ✓" if tpm_present
+                    else "No detectado ⚠" if tpm_present is False
+                    else "N/D")
+        bios_serial = bios_data.get("serial_number", "N/D") or "N/D"
+        self._make_card(grid, "Placa Base y Seguridad", [
             ("Fabricante", mb_data.get("make", mb_data.get("manufacturer", "N/D"))),
             ("Modelo", mb_data.get("model", mb_data.get("product", "N/D"))),
-            ("Nombre Modelo", mb_data.get("model_name", "N/D")),
             ("S/N Placa", mb_data.get("serial", "N/D")),
+            ("BIOS S/N", bios_serial),
             ("BIOS Versión", bios_data.get("version", "N/D")),
-            ("BIOS Fecha", bios_data.get("release_date", "N/D")),
+            ("Secure Boot", sb_text),
+            ("TPM", tpm_text),
         ], row=0, col=1)
 
         # CPU Card
@@ -139,14 +185,45 @@ class Step(BaseStep):
 
         self._make_card(grid, "Tarjeta Gráfica (GPU)", gpu_rows, row=2, col=0)
 
-        # Summary
-        summary_card = Card(self._cards_frame)
-        summary_card.pack(fill=tk.X, pady=(12, 0))
-        inner = tk.Frame(summary_card, bg=theme.BG_SURFACE0)
+        # Cross-check serial number vs. Step 1 input
+        cross_card = Card(self._cards_frame)
+        cross_card.pack(fill=tk.X, pady=(12, 0))
+        inner = tk.Frame(cross_card, bg=theme.BG_SURFACE0)
         inner.pack(fill=tk.X, padx=16, pady=10)
-        tk.Label(inner, text="✓  Información del sistema recopilada correctamente.",
-                 bg=theme.BG_SURFACE0, fg=theme.SUCCESS,
+
+        entered_serial = self._state.get("device_serial", "")
+        bios_sn = bios_serial.strip()
+        mb_sn = mb_data.get("serial", "").strip()
+
+        if entered_serial:
+            match = (entered_serial.lower() == bios_sn.lower() or
+                     entered_serial.lower() == mb_sn.lower())
+            if match:
+                serial_txt = f"✓  S/N coincide con hardware: {entered_serial}"
+                serial_fg = theme.SUCCESS
+            else:
+                serial_txt = (f"⚠  S/N ingresado '{entered_serial}' ≠ BIOS '{bios_sn}' "
+                               f"— Verifique la etiqueta física")
+                serial_fg = theme.WARNING
+        else:
+            serial_txt = "✓  Información del sistema recopilada correctamente."
+            serial_fg = theme.SUCCESS
+
+        tk.Label(inner, text=serial_txt,
+                 bg=theme.BG_SURFACE0, fg=serial_fg,
                  font=theme.FONT_BODY_BOLD).pack(anchor="w")
+
+        # Secure Boot / TPM warnings
+        if secure_boot is False:
+            tk.Label(inner,
+                     text="⚠  Secure Boot desactivado — verificar configuración UEFI",
+                     bg=theme.BG_SURFACE0, fg=theme.WARNING,
+                     font=theme.FONT_SMALL).pack(anchor="w", pady=(4, 0))
+        if tpm_present is False:
+            tk.Label(inner,
+                     text="⚠  TPM no detectado — puede ser requerido para Windows 11",
+                     bg=theme.BG_SURFACE0, fg=theme.WARNING,
+                     font=theme.FONT_SMALL).pack(anchor="w", pady=(2, 0))
 
         self.set_status(STATUS_PASSED, "Sistema analizado")
         self._set_detail(

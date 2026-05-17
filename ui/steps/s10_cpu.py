@@ -24,6 +24,7 @@ class Step(BaseStep):
         self._stress_flag = None
         self._usage_history = [0.0] * 60   # last 60 readings
         self._graph_job = None
+        self._baseline_freq = 0.0
 
         # Two columns
         cols = tk.Frame(parent, bg=theme.BG_BASE)
@@ -177,6 +178,10 @@ class Step(BaseStep):
                                      bg=theme.BG_SURFACE0,
                                      fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY)
         self._stress_lbl.pack(anchor="w")
+        self._throttle_lbl = tk.Label(stress_inner, text="",
+                                       bg=theme.BG_SURFACE0,
+                                       fg=theme.TEXT_MUTED, font=theme.FONT_SMALL)
+        self._throttle_lbl.pack(anchor="w")
 
         # Start data collection
         self.run_in_thread(self._get_cpu_info_data, on_done=self._show_cpu_info)
@@ -357,6 +362,13 @@ class Step(BaseStep):
             self._max_temp_lbl.configure(text="")
             self._stress_lbl.configure(text="⚡ Iniciando estrés...", fg=theme.WARNING)
             self._draw_stress_progress(0, self._stress_duration)
+            try:
+                import psutil
+                freq = psutil.cpu_freq()
+                self._baseline_freq = freq.current if freq else 0.0
+            except Exception:
+                self._baseline_freq = 0.0
+            self._min_stress_freq = self._baseline_freq
             threading.Thread(target=self._run_stress, daemon=True).start()
 
     def _run_stress(self):
@@ -384,6 +396,15 @@ class Step(BaseStep):
             except Exception:
                 pass
 
+            try:
+                import psutil
+                freq = psutil.cpu_freq()
+                if freq and freq.current > 0:
+                    if self._min_stress_freq == 0 or freq.current < self._min_stress_freq:
+                        self._min_stress_freq = freq.current
+            except Exception:
+                pass
+
             def upd(e=elapsed, d=dur, ts=time_str, mt=self._stress_max_temp):
                 if not self._stress_running:
                     return
@@ -394,6 +415,18 @@ class Step(BaseStep):
                 self._stress_lbl.configure(
                     text=f"⚡ Estrés activo — Tiempo restante: {ts}{temp_txt}",
                     fg=color)
+                # Throttle detection
+                if self._baseline_freq > 0 and self._min_stress_freq > 0:
+                    drop_pct = (self._baseline_freq - self._min_stress_freq) / self._baseline_freq * 100
+                    if drop_pct > 20:
+                        self._throttle_lbl.configure(
+                            text=f"⚠ Throttling detectado: frecuencia cayó {drop_pct:.0f}% "
+                                 f"({self._baseline_freq:.0f} → {self._min_stress_freq:.0f} MHz)",
+                            fg=theme.ERROR)
+                    elif drop_pct > 10:
+                        self._throttle_lbl.configure(
+                            text=f"⚠ Frecuencia reducida {drop_pct:.0f}% bajo carga",
+                            fg=theme.WARNING)
 
             self.after(0, upd)
             time.sleep(0.5)
@@ -428,9 +461,17 @@ class Step(BaseStep):
             dur_label = next((l for l, s in self._stress_durations
                               if s == self._stress_duration), f"{self._stress_duration}s")
             self._stress_lbl.configure(text=verdict, fg=temp_color)
+            throttle_warn = ""
+            if self._baseline_freq > 0 and hasattr(self, '_min_stress_freq') and self._min_stress_freq > 0:
+                drop_pct = (self._baseline_freq - self._min_stress_freq) / self._baseline_freq * 100
+                if drop_pct > 20:
+                    throttle_warn = f" | ⚠ Throttling {drop_pct:.0f}%"
+                    if temp_color == theme.SUCCESS:
+                        temp_color = theme.WARNING
             self.set_status(STATUS_PASSED,
                              f"CPU verificada — Estrés {dur_label}"
-                             + (f" | Temp. máx {mt:.1f}°C" if mt > 0 else ""))
+                             + (f" | Temp. máx {mt:.1f}°C" if mt > 0 else "")
+                             + throttle_warn)
 
         self.after(0, done)
 

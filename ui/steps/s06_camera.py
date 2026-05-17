@@ -4,14 +4,15 @@ TecoQC - Paso 6: Prueba de cámara (OpenCV si disponible)
 
 import tkinter as tk
 import threading
+import time
 from ui.steps.base_step import BaseStep
 from ui import theme
-from config import STATUS_PASSED, STATUS_FAILED
+from config import STATUS_PASSED, STATUS_FAILED, CAMERA_MIN_WIDTH, CAMERA_MIN_HEIGHT, CAMERA_MIN_FPS
 
 
 class Step(BaseStep):
     TITLE = "Prueba de Cámara"
-    DESCRIPTION = "Detecte y verifique las cámaras del equipo. Revise la vista previa en vivo."
+    DESCRIPTION = "Detecte y verifique las cámaras del equipo. Revise vista previa y FPS mínimos."
     STEP_NUM = 6
 
     def build_ui(self, parent):
@@ -20,6 +21,7 @@ class Step(BaseStep):
         self._running = False
         self._camera_idx = 0
         self._cameras_found = []
+        self._frame_times = []
 
         # Camera list
         top = tk.Frame(parent, bg=theme.BG_BASE)
@@ -77,12 +79,33 @@ class Step(BaseStep):
         )
         self._status_lbl.pack(anchor="w")
 
-        # Camera info card
+        # Camera metrics card
         tk.Frame(ctrl, height=12, bg=theme.BG_BASE).pack()
-        tk.Label(ctrl, text="Información de cámara:",
-                 bg=theme.BG_BASE, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_SMALL).pack(anchor="w")
+        metrics_frame = tk.Frame(ctrl, bg=theme.BG_SURFACE0,
+                                  highlightthickness=1,
+                                  highlightbackground=theme.BG_SURFACE1)
+        metrics_frame.pack(fill=tk.X)
+        tk.Label(metrics_frame, text="Métricas detectadas",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_SMALL).pack(anchor="w", padx=8, pady=(6, 2))
 
+        self._res_lbl = tk.Label(metrics_frame, text="Resolución: —",
+                                  bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                                  font=theme.FONT_SMALL)
+        self._res_lbl.pack(anchor="w", padx=8)
+
+        self._fps_lbl = tk.Label(metrics_frame, text="FPS: —",
+                                  bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                                  font=theme.FONT_SMALL)
+        self._fps_lbl.pack(anchor="w", padx=8, pady=(0, 6))
+
+        # Thresholds info
+        tk.Label(ctrl, text=f"Mínimos: {CAMERA_MIN_WIDTH}×{CAMERA_MIN_HEIGHT} px, ≥{CAMERA_MIN_FPS} FPS",
+                 bg=theme.BG_BASE, fg=theme.TEXT_MUTED,
+                 font=theme.FONT_SMALL, wraplength=200).pack(anchor="w", pady=(8, 0))
+
+        # Camera info label
+        tk.Frame(ctrl, height=8, bg=theme.BG_BASE).pack()
         self._cam_info_lbl = tk.Label(ctrl, text="N/D",
                                        bg=theme.BG_BASE, fg=theme.TEXT_MUTED,
                                        font=theme.FONT_SMALL, wraplength=200,
@@ -161,6 +184,7 @@ class Step(BaseStep):
             return
 
         self._camera_idx = self._cam_var.get()
+        self._frame_times = []
         try:
             cap = cv2.VideoCapture(self._camera_idx, cv2.CAP_DSHOW)
             if not cap.isOpened():
@@ -170,11 +194,25 @@ class Step(BaseStep):
                     text=f"✗ No se pudo abrir cámara {self._camera_idx}",
                     fg=theme.ERROR,
                 )
+                self.set_status(STATUS_FAILED, f"No se pudo abrir cámara {self._camera_idx}")
                 return
+
+            # Read actual resolution from camera
+            cam_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            cam_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            self._cam_width = cam_w
+            self._cam_height = cam_h
+
+            res_ok = cam_w >= CAMERA_MIN_WIDTH and cam_h >= CAMERA_MIN_HEIGHT
+            res_color = theme.SUCCESS if res_ok else theme.WARNING
+            self._res_lbl.configure(text=f"Resolución: {cam_w}×{cam_h} px",
+                                     fg=res_color)
+
             self._cap = cap
             self._running = True
             self._no_cam_lbl.place_forget()
-            self._status_lbl.configure(text="► Cámara activa", fg=theme.SUCCESS)
+            self._status_lbl.configure(text="► Cámara activa — midiendo FPS...",
+                                        fg=theme.ACCENT_BLUE)
             threading.Thread(target=self._update_frame, daemon=True).start()
         except Exception as e:
             self._status_lbl.configure(text=f"Error: {e}", fg=theme.ERROR)
@@ -188,12 +226,15 @@ class Step(BaseStep):
                 text="Error: Pillow no instalado", fg=theme.ERROR))
             return
 
+        fps_window = []
+
         while self._running and self._cap and self._cap.isOpened():
+            t0 = time.time()
             ret, frame = self._cap.read()
             if not ret:
                 break
+
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            # Resize to fit canvas
             h, w = frame.shape[:2]
             canvas_w = self._canvas.winfo_width() or 480
             canvas_h = self._canvas.winfo_height() or 320
@@ -201,20 +242,51 @@ class Step(BaseStep):
             new_w = int(w * scale)
             new_h = int(h * scale)
             frame = cv2.resize(frame, (new_w, new_h))
-
             img = Image.fromarray(frame)
             photo = ImageTk.PhotoImage(img)
 
-            def update(p=photo, pw=new_w, ph=new_h):
+            t1 = time.time()
+            fps_window.append(t1)
+            # Keep a 3-second window
+            fps_window = [t for t in fps_window if t1 - t <= 3.0]
+            measured_fps = len(fps_window) / 3.0 if len(fps_window) >= 3 else None
+
+            def update(p=photo, pw=new_w, ph=new_h, fps=measured_fps):
                 cw = self._canvas.winfo_width()
                 ch = self._canvas.winfo_height()
                 self._canvas.delete("all")
-                self._canvas.create_image(cw//2, ch//2, image=p, anchor="center")
-                self._canvas._photo = p  # keep ref
+                self._canvas.create_image(cw // 2, ch // 2, image=p, anchor="center")
+                self._canvas._photo = p
+                if fps is not None:
+                    fps_ok = fps >= CAMERA_MIN_FPS
+                    fps_color = theme.SUCCESS if fps_ok else theme.WARNING
+                    self._fps_lbl.configure(
+                        text=f"FPS: {fps:.1f} {'✓' if fps_ok else '⚠'}",
+                        fg=fps_color)
+                    # Evaluate pass/fail after collecting enough frames
+                    if len(fps_window) >= 15:
+                        cam_w = getattr(self, "_cam_width", 0)
+                        cam_h = getattr(self, "_cam_height", 0)
+                        res_ok = cam_w >= CAMERA_MIN_WIDTH and cam_h >= CAMERA_MIN_HEIGHT
+                        if res_ok and fps_ok:
+                            self._status_lbl.configure(
+                                text=f"✓ Cámara OK — {cam_w}×{cam_h} @ {fps:.1f} FPS",
+                                fg=theme.SUCCESS)
+                            self.set_status(STATUS_PASSED,
+                                             f"{cam_w}×{cam_h} px @ {fps:.1f} FPS")
+                        else:
+                            issues = []
+                            if not res_ok:
+                                issues.append(f"resolución {cam_w}×{cam_h} baja")
+                            if not fps_ok:
+                                issues.append(f"FPS {fps:.1f} insuficiente")
+                            self._status_lbl.configure(
+                                text=f"⚠ Cámara con problemas: {', '.join(issues)}",
+                                fg=theme.WARNING)
+                            self.set_status(STATUS_FAILED, ", ".join(issues))
 
             self.after(0, update)
-            import time
-            time.sleep(0.033)  # ~30 fps
+            time.sleep(0.033)
 
         self.after(0, lambda: self._status_lbl.configure(
             text="■ Cámara detenida", fg=theme.TEXT_MUTED))

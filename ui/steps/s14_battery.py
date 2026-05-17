@@ -162,6 +162,36 @@ class Step(BaseStep):
             InfoRow(health_inner, lbl, str(val), label_width=16,
                     bg=theme.BG_SURFACE0).pack(fill=tk.X, pady=3)
 
+        # Charger detection test
+        charger_card = Card(self._main)
+        charger_card.pack(fill=tk.X, pady=(12, 0))
+
+        ch_inner = tk.Frame(charger_card, bg=theme.BG_SURFACE0)
+        ch_inner.pack(fill=tk.X, padx=16, pady=12)
+
+        tk.Label(ch_inner, text="Prueba de Cargador",
+                 bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
+                 font=theme.FONT_H3).pack(anchor="w", pady=(0, 6))
+
+        tk.Label(ch_inner,
+                 text="Conecte o desconecte el cargador para verificar que el sistema\n"
+                      "lo detecta correctamente (debe cambiar el estado).",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_BODY, justify="left").pack(anchor="w", pady=(0, 8))
+
+        ch_btn_row = tk.Frame(ch_inner, bg=theme.BG_SURFACE0)
+        ch_btn_row.pack(anchor="w")
+
+        self._charger_btn = tk.Button(
+            ch_btn_row, text="🔌  Detectar cambio de cargador (5s)",
+            command=self._test_charger, **theme.BTN_SECONDARY)
+        self._charger_btn.pack(side=tk.LEFT, padx=(0, 12))
+
+        self._charger_lbl = tk.Label(ch_inner, text="",
+                                      bg=theme.BG_SURFACE0,
+                                      fg=theme.TEXT_MUTED, font=theme.FONT_BODY)
+        self._charger_lbl.pack(anchor="w", pady=(6, 0))
+
         # Report button
         tk.Frame(self._main, height=12, bg=theme.BG_BASE).pack()
 
@@ -231,6 +261,61 @@ class Step(BaseStep):
     def _powercfg_error(self, error):
         self._report_btn.configure(state=tk.NORMAL)
         self._report_lbl.configure(text=f"Error: {error}", fg=theme.ERROR)
+
+    def _test_charger(self):
+        self._charger_btn.configure(state=tk.DISABLED)
+        self._charger_lbl.configure(
+            text="⏳ Monitoreando cambio de estado durante 5 segundos...\n"
+                 "Conecte o desconecte el cargador ahora.",
+            fg=theme.ACCENT_BLUE)
+        self.run_in_thread(self._do_test_charger, on_done=self._show_charger_result,
+                            on_error=lambda e: self._charger_error(e))
+
+    def _do_test_charger(self):
+        import psutil, time
+        initial = psutil.sensors_battery()
+        initial_plugged = initial.power_plugged if initial else None
+        initial_pct = initial.percent if initial else 0
+
+        for _ in range(10):
+            time.sleep(0.5)
+            current = psutil.sensors_battery()
+            if current is None:
+                continue
+            if initial_plugged is not None and current.power_plugged != initial_plugged:
+                return {
+                    "changed": True,
+                    "from": "Conectado" if initial_plugged else "Desconectado",
+                    "to": "Conectado" if current.power_plugged else "Desconectado",
+                    "charge_pct": current.percent,
+                }
+
+        return {
+            "changed": False,
+            "plugged": initial_plugged,
+            "charge_pct": initial_pct,
+        }
+
+    def _show_charger_result(self, result):
+        self._charger_btn.configure(state=tk.NORMAL)
+        if result.get("changed"):
+            from_state = result.get("from", "?")
+            to_state = result.get("to", "?")
+            self._charger_lbl.configure(
+                text=f"✓ Cargador detectado: {from_state} → {to_state}  "
+                     f"(carga: {result.get('charge_pct', 0):.0f}%)",
+                fg=theme.SUCCESS)
+        else:
+            plugged = result.get("plugged")
+            state = "Conectado" if plugged else "Desconectado" if plugged is False else "N/D"
+            self._charger_lbl.configure(
+                text=f"⚠ No se detectó cambio en 5s — estado actual: {state}\n"
+                     f"Pruebe conectar/desconectar más rápido.",
+                fg=theme.WARNING)
+
+    def _charger_error(self, error):
+        self._charger_btn.configure(state=tk.NORMAL)
+        self._charger_lbl.configure(text=f"Error: {error}", fg=theme.ERROR)
 
     def _show_error(self, error):
         self._spinner.stop()

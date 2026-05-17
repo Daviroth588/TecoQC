@@ -1,13 +1,11 @@
 """
-TecoQC - Paso 9: Prueba de audio (altavoces + micrófono)
+TecoQC - Paso 9: Prueba de audio (altavoces estéreo + micrófono con noise floor)
 """
 
 import tkinter as tk
 import threading
 import math
-import struct
 import wave
-import io
 import os
 
 from ui.steps.base_step import BaseStep
@@ -18,7 +16,7 @@ from config import STATUS_PASSED, STATUS_FAILED, AUDIO_FREQUENCY, AUDIO_DURATION
 
 class Step(BaseStep):
     TITLE = "Prueba de Audio"
-    DESCRIPTION = "Prueba de altavoces (tono de prueba) y detección de micrófono."
+    DESCRIPTION = "Prueba de altavoces estéreo (L/R) y micrófono con detección de nivel vs. ruido."
     STEP_NUM = 9
 
     def build_ui(self, parent):
@@ -34,30 +32,21 @@ class Step(BaseStep):
         tk.Label(spk_card, text="Altavoces",
                  bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
                  font=theme.FONT_H3).pack(anchor="w", padx=16, pady=(12, 6))
-
         tk.Frame(spk_card, height=1, bg=theme.BG_SURFACE2).pack(fill=tk.X, padx=16)
 
         spk_inner = tk.Frame(spk_card, bg=theme.BG_SURFACE0)
         spk_inner.pack(fill=tk.X, padx=16, pady=12)
 
         tk.Label(spk_inner,
-                 text="Haga clic en 'Reproducir tono' para escuchar un tono de 440 Hz.\n"
-                      "Pruebe con diferentes frecuencias para verificar el espectro de audio.",
+                 text="Reproduzca tonos para verificar los canales. "
+                      "Confirme si escucha cada tono correctamente.",
                  bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_BODY, wraplength=300, justify="left").pack(anchor="w", pady=(0, 12))
+                 font=theme.FONT_BODY, wraplength=300, justify="left").pack(anchor="w", pady=(0, 10))
 
         # Frequency selector
-        freq_frame = tk.Frame(spk_inner, bg=theme.BG_SURFACE0)
-        freq_frame.pack(fill=tk.X, pady=(0, 10))
-
-        tk.Label(freq_frame, text="Frecuencia:",
-                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_BODY).pack(side=tk.LEFT)
-
         self._freq_var = tk.IntVar(value=AUDIO_FREQUENCY)
         freqs = [("200 Hz (Bajo)", 200), ("440 Hz (La)", 440),
                   ("1000 Hz (Medio)", 1000), ("4000 Hz (Alto)", 4000)]
-
         freq_sel = tk.Frame(spk_inner, bg=theme.BG_SURFACE0)
         freq_sel.pack(fill=tk.X, pady=(0, 8))
         for label, val in freqs:
@@ -70,27 +59,71 @@ class Step(BaseStep):
                 activebackground=theme.BG_SURFACE0,
             ).pack(side=tk.LEFT, padx=4)
 
-        # Play buttons
-        btn_row = tk.Frame(spk_inner, bg=theme.BG_SURFACE0)
-        btn_row.pack(fill=tk.X, pady=(0, 12))
+        # Stereo channel buttons
+        chan_frame = tk.Frame(spk_inner, bg=theme.BG_SURFACE0)
+        chan_frame.pack(fill=tk.X, pady=(0, 8))
 
-        tk.Button(btn_row, text="▶  Reproducir tono",
-                   command=self._play_tone, **theme.BTN_PRIMARY).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(chan_frame, text="◄ Canal Izquierdo",
+                   command=lambda: self._play_channel("left"),
+                   bg=theme.ACCENT_BLUE, fg=theme.BG_CRUST,
+                   font=theme.FONT_BODY_BOLD, relief="flat",
+                   cursor="hand2", padx=12, pady=6,
+                   ).pack(side=tk.LEFT, padx=(0, 6))
 
-        tk.Button(btn_row, text="▶▶  Tono continuo (3s)",
+        tk.Button(chan_frame, text="Canal Derecho ►",
+                   command=lambda: self._play_channel("right"),
+                   bg=theme.ACCENT_LAVENDER, fg=theme.BG_CRUST,
+                   font=theme.FONT_BODY_BOLD, relief="flat",
+                   cursor="hand2", padx=12, pady=6,
+                   ).pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(chan_frame, text="▶ Ambos canales",
+                   command=self._play_tone, **theme.BTN_PRIMARY).pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(chan_frame, text="▶▶ Continuo (3s)",
                    command=self._play_long_tone, **theme.BTN_SECONDARY).pack(side=tk.LEFT)
+
+        # Channel status indicators
+        chan_status_row = tk.Frame(spk_inner, bg=theme.BG_SURFACE0)
+        chan_status_row.pack(fill=tk.X, pady=(4, 0))
+        self._left_lbl = tk.Label(chan_status_row, text="◄ Izq: pendiente",
+                                   bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                                   font=theme.FONT_SMALL)
+        self._left_lbl.pack(side=tk.LEFT, padx=(0, 16))
+        self._right_lbl = tk.Label(chan_status_row, text="Der ►: pendiente",
+                                    bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                                    font=theme.FONT_SMALL)
+        self._right_lbl.pack(side=tk.LEFT)
 
         self._spk_status_lbl = tk.Label(
             spk_inner, text="● Esperando prueba",
             bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED, font=theme.FONT_BODY,
         )
-        self._spk_status_lbl.pack(anchor="w", pady=(4, 0))
+        self._spk_status_lbl.pack(anchor="w", pady=(8, 0))
+
+        # Manual confirm buttons for stereo
+        confirm_row = tk.Frame(spk_inner, bg=theme.BG_SURFACE0)
+        confirm_row.pack(fill=tk.X, pady=(6, 0))
+        tk.Label(confirm_row, text="¿Escuchó ambos canales?",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_SMALL).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(confirm_row, text="✓ Sí",
+                   command=lambda: self._confirm_speaker(True),
+                   bg=theme.SUCCESS, fg=theme.BG_BASE,
+                   font=theme.FONT_SMALL, relief="flat", padx=8, pady=3,
+                   cursor="hand2").pack(side=tk.LEFT, padx=2)
+        tk.Button(confirm_row, text="✗ No",
+                   command=lambda: self._confirm_speaker(False),
+                   bg=theme.ERROR, fg=theme.BG_BASE,
+                   font=theme.FONT_SMALL, relief="flat", padx=8, pady=3,
+                   cursor="hand2").pack(side=tk.LEFT, padx=2)
+
+        self._spk_confirmed = None
 
         # Speaker device list
         tk.Label(spk_inner, text="Dispositivos de audio detectados:",
                  bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
                  font=theme.FONT_SMALL).pack(anchor="w", pady=(12, 4))
-
         self._spk_devices_lbl = tk.Label(
             spk_inner, text="Detectando...",
             bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
@@ -105,35 +138,35 @@ class Step(BaseStep):
         tk.Label(mic_card, text="Micrófono",
                  bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
                  font=theme.FONT_H3).pack(anchor="w", padx=16, pady=(12, 6))
-
         tk.Frame(mic_card, height=1, bg=theme.BG_SURFACE2).pack(fill=tk.X, padx=16)
 
         mic_inner = tk.Frame(mic_card, bg=theme.BG_SURFACE0)
         mic_inner.pack(fill=tk.X, padx=16, pady=12)
 
         tk.Label(mic_inner,
-                 text="Detecte el micrófono del equipo e intente grabar\n"
-                      "para verificar su funcionamiento.",
+                 text="Primero mide el ruido de fondo (1s silencio), luego graba\n"
+                      "3s hablando para verificar el nivel de voz.",
                  bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_BODY, wraplength=280, justify="left").pack(anchor="w", pady=(0, 12))
+                 font=theme.FONT_BODY, wraplength=280, justify="left").pack(anchor="w", pady=(0, 10))
 
-        # Mic device list
         tk.Label(mic_inner, text="Micrófonos detectados:",
                  bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
                  font=theme.FONT_SMALL).pack(anchor="w", pady=(0, 4))
-
         self._mic_devices_lbl = tk.Label(
             mic_inner, text="Detectando...",
             bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
-            font=theme.FONT_SMALL, justify="left", anchor="w",
-            wraplength=280,
+            font=theme.FONT_SMALL, justify="left", anchor="w", wraplength=280,
         )
         self._mic_devices_lbl.pack(anchor="w")
 
-        # Level meter canvas
-        tk.Label(mic_inner, text="Nivel de entrada (requiere sounddevice):",
+        tk.Label(mic_inner, text="Nivel de entrada:",
                  bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_SMALL).pack(anchor="w", pady=(16, 4))
+                 font=theme.FONT_SMALL).pack(anchor="w", pady=(12, 2))
+
+        self._noise_lbl = tk.Label(mic_inner, text="Ruido de fondo: —",
+                                    bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED,
+                                    font=theme.FONT_SMALL)
+        self._noise_lbl.pack(anchor="w", pady=(0, 4))
 
         self._level_canvas = tk.Canvas(mic_inner, height=24, bg=theme.BG_SURFACE1,
                                         highlightthickness=1,
@@ -144,14 +177,18 @@ class Step(BaseStep):
         mic_btn_row = tk.Frame(mic_inner, bg=theme.BG_SURFACE0)
         mic_btn_row.pack(fill=tk.X, pady=(4, 0))
 
+        tk.Button(mic_btn_row, text="🔇 Medir ruido (1s)",
+                   command=self._measure_noise, **theme.BTN_NEUTRAL).pack(side=tk.LEFT, padx=(0, 8))
         tk.Button(mic_btn_row, text="🎙 Probar micrófono (3s)",
-                   command=self._test_mic, **theme.BTN_SECONDARY).pack(side=tk.LEFT, padx=(0, 8))
+                   command=self._test_mic, **theme.BTN_SECONDARY).pack(side=tk.LEFT)
 
         self._mic_status_lbl = tk.Label(
             mic_inner, text="● Esperando prueba",
             bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED, font=theme.FONT_BODY,
         )
         self._mic_status_lbl.pack(anchor="w", pady=(8, 0))
+
+        self._noise_floor = 0.0
 
         # Detect audio devices
         self.run_in_thread(self._get_audio_devices, on_done=self._show_audio_devices)
@@ -160,13 +197,11 @@ class Step(BaseStep):
         pass
 
     def _get_audio_devices(self):
-        speakers = []
-        mics = []
+        speakers, mics = [], []
         try:
             import wmi
             c = wmi.WMI()
-            entities = c.Win32_PnPEntity()
-            for e in entities:
+            for e in c.Win32_PnPEntity():
                 name = (e.Name or "").lower()
                 pnp = (e.PNPClass or "").upper()
                 if pnp in ("MEDIA", "SOUND"):
@@ -175,48 +210,78 @@ class Step(BaseStep):
                         mics.append(full_name)
                     else:
                         speakers.append(full_name)
-        except Exception as ex:
-            speakers.append(f"Error: {ex}")
-
-        # Also try sounddevice
-        sd_speakers = []
-        sd_mics = []
+        except Exception:
+            pass
         try:
             import sounddevice as sd
             devices = sd.query_devices()
-            for d in devices:
-                if d.get("max_output_channels", 0) > 0:
-                    sd_speakers.append(d.get("name", ""))
-                if d.get("max_input_channels", 0) > 0:
-                    sd_mics.append(d.get("name", ""))
+            if not speakers:
+                speakers = [d.get("name", "") for d in devices if d.get("max_output_channels", 0) > 0]
+            if not mics:
+                mics = [d.get("name", "") for d in devices if d.get("max_input_channels", 0) > 0]
         except Exception:
             pass
-
-        return {"speakers": speakers or sd_speakers, "mics": mics or sd_mics}
+        return {"speakers": speakers, "mics": mics}
 
     def _show_audio_devices(self, data):
         speakers = data.get("speakers", [])
         mics = data.get("mics", [])
-
-        spk_text = "\n".join(f"• {s[:45]}" for s in speakers[:5]) if speakers else "No detectados"
-        mic_text = "\n".join(f"• {m[:45]}" for m in mics[:5]) if mics else "No detectados"
-
         self._spk_devices_lbl.configure(
-            text=spk_text,
-            fg=theme.TEXT_SECONDARY if speakers else theme.WARNING,
-        )
+            text="\n".join(f"• {s[:45]}" for s in speakers[:5]) if speakers else "No detectados",
+            fg=theme.TEXT_SECONDARY if speakers else theme.WARNING)
         self._mic_devices_lbl.configure(
-            text=mic_text,
-            fg=theme.TEXT_SECONDARY if mics else theme.WARNING,
-        )
+            text="\n".join(f"• {m[:45]}" for m in mics[:5]) if mics else "No detectados",
+            fg=theme.TEXT_SECONDARY if mics else theme.WARNING)
+
+    def _play_channel(self, channel):
+        freq = self._freq_var.get()
+        self._spk_status_lbl.configure(
+            text=f"► {channel.capitalize()} — {freq} Hz...", fg=theme.ACCENT_BLUE)
+        threading.Thread(target=self._do_play_channel,
+                          args=(freq, channel), daemon=True).start()
+
+    def _do_play_channel(self, frequency, channel):
+        played = False
+        try:
+            import sounddevice as sd
+            import numpy as np
+            sample_rate = 44100
+            duration = 1.5
+            t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+            tone = (0.5 * np.sin(2 * np.pi * frequency * t)).astype(np.float32)
+            stereo = np.zeros((len(tone), 2), dtype=np.float32)
+            if channel == "left":
+                stereo[:, 0] = tone
+            elif channel == "right":
+                stereo[:, 1] = tone
+            else:
+                stereo[:, 0] = tone
+                stereo[:, 1] = tone
+            sd.play(stereo, sample_rate)
+            sd.wait()
+            played = True
+        except Exception:
+            pass
+
+        if not played:
+            self._do_play_tone(frequency, 1)
+            return
+
+        def update(ch=channel, ok=played):
+            lbl = self._left_lbl if ch == "left" else self._right_lbl
+            prefix = "◄ Izq:" if ch == "left" else "Der ►:"
+            lbl.configure(text=f"{prefix} reproducido ✓", fg=theme.SUCCESS)
+            self._spk_status_lbl.configure(
+                text=f"✓ Canal {ch} reproducido", fg=theme.SUCCESS)
+
+        self.after(0, update)
 
     def _play_tone(self):
         freq = self._freq_var.get()
         self._spk_status_lbl.configure(
             text=f"► Reproduciendo {freq} Hz...", fg=theme.ACCENT_BLUE)
         threading.Thread(target=self._do_play_tone,
-                          args=(freq, AUDIO_DURATION // 1000),
-                          daemon=True).start()
+                          args=(freq, AUDIO_DURATION // 1000), daemon=True).start()
 
     def _play_long_tone(self):
         freq = self._freq_var.get()
@@ -226,43 +291,30 @@ class Step(BaseStep):
 
     def _do_play_tone(self, frequency, duration_s):
         played = False
-
-        # Try winsound
         try:
             import winsound
             winsound.Beep(frequency, duration_s * 1000)
             played = True
         except Exception:
             pass
-
-        # Try sounddevice
         if not played:
             try:
                 import sounddevice as sd
                 import numpy as np
                 sample_rate = 44100
-                t = (1.0 / sample_rate) * \
-                    (sample_rate * duration_s)
-                samples = 0.5 * (
-                    (lambda: __import__("numpy").sin(
-                        2 * __import__("numpy").pi * frequency *
-                        __import__("numpy").linspace(0, duration_s, int(sample_rate * duration_s))))()
-                )
-                sd.play(samples, sample_rate)
+                t = np.linspace(0, duration_s, int(sample_rate * duration_s), endpoint=False)
+                samples = 0.5 * np.sin(2 * np.pi * frequency * t)
+                sd.play(samples.astype(np.float32), sample_rate)
                 sd.wait()
                 played = True
             except Exception:
                 pass
-
-        # Write a WAV and open it
         if not played:
             try:
                 sample_rate = 44100
                 num_samples = int(sample_rate * duration_s)
-                data = bytes([
-                    int(127.5 * math.sin(2 * math.pi * frequency * t / sample_rate) + 127.5)
-                    for t in range(num_samples)
-                ])
+                data = bytes([int(127.5 * math.sin(2 * math.pi * frequency * t / sample_rate) + 127.5)
+                               for t in range(num_samples)])
                 tmp_path = os.path.join(os.environ.get("TEMP", "."), "_tecoqc_tone.wav")
                 with wave.open(tmp_path, "wb") as wf:
                     wf.setnchannels(1)
@@ -278,15 +330,47 @@ class Step(BaseStep):
         def update():
             if played:
                 self._spk_status_lbl.configure(
-                    text="✓ Tono reproducido — ¿Escuchó el tono?",
-                    fg=theme.SUCCESS)
+                    text="✓ Tono reproducido — ¿Escuchó el tono?", fg=theme.SUCCESS)
             else:
                 self._spk_status_lbl.configure(
-                    text="⚠ No se pudo reproducir audio automáticamente.\n"
-                         "Pruebe manualmente reproduciendo un archivo de audio.",
-                    fg=theme.WARNING)
-
+                    text="⚠ No se pudo reproducir audio automáticamente.", fg=theme.WARNING)
         self.after(0, update)
+
+    def _confirm_speaker(self, ok):
+        self._spk_confirmed = ok
+        if ok:
+            self._spk_status_lbl.configure(text="✓ Altavoces confirmados por técnico",
+                                            fg=theme.SUCCESS)
+        else:
+            self._spk_status_lbl.configure(text="✗ Técnico reporta fallo en altavoces",
+                                            fg=theme.ERROR)
+        self._evaluate_overall()
+
+    def _measure_noise(self):
+        self._mic_status_lbl.configure(text="🔇 Midiendo ruido de fondo (1s)...",
+                                        fg=theme.ACCENT_BLUE)
+        threading.Thread(target=self._do_measure_noise, daemon=True).start()
+
+    def _do_measure_noise(self):
+        try:
+            import sounddevice as sd
+            import numpy as np
+            recording = sd.rec(int(44100 * 1.0), samplerate=44100, channels=1)
+            sd.wait()
+            noise = float(np.abs(recording).mean()) * 1000
+            self._noise_floor = noise
+
+            def update(n=noise):
+                self._noise_lbl.configure(
+                    text=f"Ruido de fondo: {n:.2f}  (menor = mejor)",
+                    fg=theme.TEXT_SECONDARY)
+                self._mic_status_lbl.configure(
+                    text="✓ Ruido medido — ahora pruebe el micrófono",
+                    fg=theme.SUCCESS)
+            self.after(0, update)
+        except Exception as e:
+            self.after(0, lambda: self._mic_status_lbl.configure(
+                text=f"Error midiendo ruido: {e}", fg=theme.WARNING))
 
     def _test_mic(self):
         self._mic_status_lbl.configure(
@@ -295,15 +379,11 @@ class Step(BaseStep):
 
     def _do_test_mic(self):
         recorded = False
-        level = 0
-
+        level = 0.0
         try:
             import sounddevice as sd
             import numpy as np
-            sample_rate = 44100
-            duration = 3
-            recording = sd.rec(int(duration * sample_rate),
-                                samplerate=sample_rate, channels=1)
+            recording = sd.rec(int(3 * 44100), samplerate=44100, channels=1)
             sd.wait()
             level = float(np.abs(recording).mean()) * 1000
             recorded = True
@@ -317,33 +397,45 @@ class Step(BaseStep):
         def update():
             if recorded:
                 self._draw_level(min(level * 100, 100))
-                if level > 0.5:
+                noise = self._noise_floor
+                threshold = max(noise * 3.0, 0.5)
+                if level > threshold:
                     self._mic_status_lbl.configure(
-                        text=f"✓ Micrófono activo — Nivel: {level:.1f}",
+                        text=f"✓ Micrófono activo — Nivel: {level:.2f} (ruido: {noise:.2f})",
                         fg=theme.SUCCESS)
+                    self._evaluate_overall(mic_ok=True)
                 else:
                     self._mic_status_lbl.configure(
-                        text="⚠ Nivel muy bajo — Hable más fuerte o verifique el micrófono",
+                        text=f"⚠ Nivel bajo: {level:.2f} vs umbral {threshold:.2f} — Hable más fuerte",
                         fg=theme.WARNING)
+                    self._evaluate_overall(mic_ok=False)
             else:
                 self._mic_status_lbl.configure(
-                    text="⚠ sounddevice no disponible.\n"
-                         "Instale: pip install sounddevice\n"
-                         "Verificación manual requerida.",
+                    text="⚠ sounddevice no disponible.\nInstale: pip install sounddevice",
                     fg=theme.WARNING)
-
         self.after(0, update)
+
+    def _evaluate_overall(self, mic_ok=None):
+        spk = self._spk_confirmed
+        mic = mic_ok
+        if spk is True and mic is True:
+            self.set_status(STATUS_PASSED, "Altavoces ✓ | Micrófono ✓")
+        elif spk is False or mic is False:
+            issues = []
+            if spk is False:
+                issues.append("altavoces")
+            if mic is False:
+                issues.append("micrófono")
+            self.set_status(STATUS_FAILED, f"Fallo en: {', '.join(issues)}")
 
     def _draw_level(self, pct):
         w = self._level_canvas.winfo_width() or 300
         h = 24
         self._level_canvas.delete("all")
-        self._level_canvas.create_rectangle(0, 0, w, h,
-                                              fill=theme.BG_SURFACE1, outline="")
+        self._level_canvas.create_rectangle(0, 0, w, h, fill=theme.BG_SURFACE1, outline="")
         fill_w = int(w * max(0, min(pct, 100)) / 100)
         if fill_w > 0:
             color = (theme.SUCCESS if pct < 70
                       else theme.WARNING if pct < 90
                       else theme.ERROR)
-            self._level_canvas.create_rectangle(0, 2, fill_w, h-2,
-                                                  fill=color, outline="")
+            self._level_canvas.create_rectangle(0, 2, fill_w, h-2, fill=color, outline="")

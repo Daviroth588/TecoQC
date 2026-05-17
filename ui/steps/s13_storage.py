@@ -6,7 +6,8 @@ import tkinter as tk
 from ui.steps.base_step import BaseStep
 from ui.components import Card, InfoRow, Spinner
 from ui import theme
-from config import STATUS_PASSED, STATUS_FAILED
+from config import (STATUS_PASSED, STATUS_FAILED,
+                    DISK_SPEED_HDD_MIN_MB_S, DISK_SPEED_SSD_MIN_MB_S, DISK_IOPS_4K_MIN)
 
 
 class Step(BaseStep):
@@ -200,7 +201,7 @@ class Step(BaseStep):
                  font=theme.FONT_SMALL).pack(anchor="w")
 
     def _build_speed_test(self):
-        tk.Label(self._main, text="Prueba de Velocidad de Disco",
+        tk.Label(self._main, text="Prueba de Velocidad y E/S Aleatorio",
                  bg=theme.BG_BASE, fg=theme.TEXT_PRIMARY,
                  font=theme.FONT_H3).pack(anchor="w", pady=(12, 8))
 
@@ -210,15 +211,41 @@ class Step(BaseStep):
         inner = tk.Frame(speed_card, bg=theme.BG_SURFACE0)
         inner.pack(fill=tk.X, padx=16, pady=12)
 
+        # Disk type selector
+        type_row = tk.Frame(inner, bg=theme.BG_SURFACE0)
+        type_row.pack(anchor="w", pady=(0, 8))
+        tk.Label(type_row, text="Tipo de disco:",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_BODY).pack(side=tk.LEFT, padx=(0, 10))
+
+        self._disk_type_var = tk.StringVar(value="SSD")
+        for dtype in ["HDD", "SSD", "NVMe"]:
+            tk.Radiobutton(
+                type_row, text=dtype,
+                variable=self._disk_type_var, value=dtype,
+                bg=theme.BG_SURFACE0, fg=theme.TEXT_PRIMARY,
+                selectcolor=theme.BG_SURFACE1,
+                font=theme.FONT_BODY,
+                activebackground=theme.BG_SURFACE0,
+                indicatoron=0, relief="flat", padx=10, pady=4, cursor="hand2",
+            ).pack(side=tk.LEFT, padx=3)
+
+        self._threshold_lbl = tk.Label(
+            inner, text="",
+            bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED, font=theme.FONT_SMALL)
+        self._threshold_lbl.pack(anchor="w", pady=(0, 8))
+        self._disk_type_var.trace_add("write", self._update_threshold_label)
+        self._update_threshold_label()
+
         tk.Label(inner,
-                 text="Escribe y lee 64 MB en el directorio del usuario para medir la velocidad del disco.",
+                 text="Escribe 64 MB secuencial + 4 MB aleatorio (4 KB bloques) para medir rendimiento.",
                  bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
                  font=theme.FONT_BODY).pack(anchor="w", pady=(0, 10))
 
         btn_row = tk.Frame(inner, bg=theme.BG_SURFACE0)
         btn_row.pack(anchor="w")
 
-        self._speed_btn = tk.Button(btn_row, text="▶  Iniciar prueba de velocidad (64 MB)",
+        self._speed_btn = tk.Button(btn_row, text="▶  Iniciar prueba completa",
                                      command=self._run_speed_test, **theme.BTN_SECONDARY)
         self._speed_btn.pack(side=tk.LEFT, padx=(0, 12))
 
@@ -227,29 +254,111 @@ class Step(BaseStep):
                                     font=theme.FONT_BODY)
         self._speed_lbl.pack(anchor="w", pady=(8, 0))
 
+        self._iops_lbl = tk.Label(inner, text="",
+                               bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                               font=theme.FONT_SMALL)
+        self._iops_lbl.pack(anchor="w", pady=(2, 0))
+
+    def _update_threshold_label(self, *args):
+        dtype = self._disk_type_var.get()
+        if dtype == "HDD":
+            threshold = DISK_SPEED_HDD_MIN_MB_S
+        else:
+            threshold = DISK_SPEED_SSD_MIN_MB_S
+        self._threshold_lbl.configure(
+            text=f"Umbral mínimo para {dtype}: {threshold} MB/s escritura | {DISK_IOPS_4K_MIN} IOPS (4K)")
+
     def _run_speed_test(self):
         self._speed_btn.configure(state=tk.DISABLED)
-        self._speed_lbl.configure(text="⏳ Ejecutando... (puede tardar 10-30s)",
+        self._speed_lbl.configure(text="⏳ Ejecutando prueba secuencial...",
                                    fg=theme.ACCENT_BLUE)
+        self._iops_lbl.configure(text="")
         self.run_in_thread(self._do_speed_test, on_done=self._show_speed,
                             on_error=lambda e: self._speed_error(e))
 
     def _do_speed_test(self):
         from hardware.storage import run_disk_speed_test
-        return run_disk_speed_test(size_mb=64)
+        seq = run_disk_speed_test(size_mb=64)
+        iops_result = self._run_iops_test()
+        return {"sequential": seq, "iops": iops_result}
+
+    def _run_iops_test(self):
+        import os, random, time, tempfile
+        block_size = 4096
+        num_blocks = 1024  # 4 MB total
+        results = {"iops": 0, "error": None}
+        tmp_path = None
+        try:
+            tmp_dir = os.path.expanduser("~")
+            tmp_path = os.path.join(tmp_dir, "_tecoqc_iops_test.tmp")
+            data = os.urandom(block_size * num_blocks)
+            with open(tmp_path, "wb") as f:
+                f.write(data)
+            rng = random.Random(12345)
+            offsets = [rng.randint(0, num_blocks - 1) * block_size
+                       for _ in range(num_blocks)]
+            t0 = time.time()
+            with open(tmp_path, "rb") as f:
+                for offset in offsets:
+                    f.seek(offset)
+                    f.read(block_size)
+            elapsed = time.time() - t0
+            results["iops"] = round(num_blocks / elapsed) if elapsed > 0 else 0
+        except Exception as e:
+            results["error"] = str(e)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+        return results
 
     def _show_speed(self, result):
         self._speed_btn.configure(state=tk.NORMAL)
-        if result.get("error"):
-            self._speed_lbl.configure(
-                text=f"✗ Error: {result['error']}", fg=theme.ERROR)
+        seq = result.get("sequential", {})
+        iops_data = result.get("iops", {})
+
+        if seq.get("error"):
+            self._speed_lbl.configure(text=f"✗ Error: {seq['error']}", fg=theme.ERROR)
             return
-        wr = result.get("write_mb_s", 0)
-        rd = result.get("read_mb_s", 0)
+
+        wr = seq.get("write_mb_s", 0)
+        rd = seq.get("read_mb_s", 0)
+        iops = iops_data.get("iops", 0)
+
+        dtype = self._disk_type_var.get()
+        threshold = DISK_SPEED_HDD_MIN_MB_S if dtype == "HDD" else DISK_SPEED_SSD_MIN_MB_S
+
+        speed_ok = wr >= threshold
+        iops_ok = iops >= DISK_IOPS_4K_MIN if iops > 0 else True  # skip if iops test failed
+
+        speed_fg = theme.SUCCESS if speed_ok else theme.WARNING
+        iops_fg = theme.SUCCESS if iops_ok else theme.WARNING
+
         self._speed_lbl.configure(
-            text=f"✓  Escritura: {wr:.1f} MB/s  |  Lectura: {rd:.1f} MB/s",
-            fg=theme.SUCCESS)
-        self._set_detail(f"Escritura: {wr:.1f} MB/s | Lectura: {rd:.1f} MB/s")
+            text=f"{'✓' if speed_ok else '⚠'} Escritura: {wr:.1f} MB/s  |  Lectura: {rd:.1f} MB/s  "
+                 f"(umbral {dtype}: {threshold} MB/s)",
+            fg=speed_fg)
+
+        if iops > 0:
+            self._iops_lbl.configure(
+                text=f"{'✓' if iops_ok else '⚠'} E/S aleatoria (4K): {iops:,} IOPS  "
+                     f"(umbral: {DISK_IOPS_4K_MIN:,} IOPS)",
+                fg=iops_fg)
+
+        self._set_detail(f"Write: {wr:.1f} MB/s | Read: {rd:.1f} MB/s | {iops:,} IOPS")
+
+        if speed_ok and iops_ok:
+            self.set_status(STATUS_PASSED,
+                             f"{dtype}: {wr:.1f} MB/s wr | {iops:,} IOPS")
+        else:
+            issues = []
+            if not speed_ok:
+                issues.append(f"velocidad {wr:.1f} MB/s < {threshold} MB/s")
+            if not iops_ok and iops > 0:
+                issues.append(f"IOPS {iops:,} < {DISK_IOPS_4K_MIN:,}")
+            self.set_status(STATUS_FAILED, " | ".join(issues))
 
     def _speed_error(self, error):
         self._speed_btn.configure(state=tk.NORMAL)

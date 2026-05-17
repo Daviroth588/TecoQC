@@ -129,7 +129,14 @@ class Step(BaseStep):
             command=self._open_report,
             state=tk.DISABLED, **theme.BTN_SECONDARY,
         )
-        self._open_btn.pack(side=tk.LEFT)
+        self._open_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._pdf_btn = tk.Button(
+            btn_row, text="📄  Exportar PDF",
+            command=self._generate_pdf,
+            state=tk.DISABLED, **theme.BTN_SUCCESS,
+        )
+        self._pdf_btn.pack(side=tk.LEFT)
 
         self._report_status_lbl = tk.Label(
             gen_inner, text="",
@@ -143,6 +150,14 @@ class Step(BaseStep):
             bg=theme.BG_SURFACE0, fg=theme.TEXT_MUTED, font=theme.FONT_SMALL,
         )
         self._tech_info_lbl.pack(anchor="w")
+
+        tk.Frame(gen_inner, height=10, bg=theme.BG_SURFACE0).pack()
+        tk.Label(gen_inner, text="Observaciones finales del técnico:",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_SMALL).pack(anchor="w")
+        self._final_notes_entry = tk.Entry(gen_inner, **theme.ENTRY_STYLE, width=80)
+        self._final_notes_entry.pack(fill=tk.X, pady=(4, 0), ipady=4)
+        self._final_notes_entry.insert(0, "")
 
     def on_enter(self):
         """Refresh the summary each time this step is shown."""
@@ -251,6 +266,7 @@ class Step(BaseStep):
         self._gen_btn.configure(state=tk.NORMAL)
         self._report_path = path
         self._open_btn.configure(state=tk.NORMAL)
+        self._pdf_btn.configure(state=tk.NORMAL)
         self._report_status_lbl.configure(
             text=f"✓ Reporte guardado:\n{path}", fg=theme.SUCCESS)
         self.set_status(STATUS_PASSED, f"Reporte generado: {os.path.basename(path)}")
@@ -271,3 +287,187 @@ class Step(BaseStep):
                 except Exception:
                     self._report_status_lbl.configure(
                         text=f"Error al abrir: {e}", fg=theme.ERROR)
+
+    def _generate_pdf(self):
+        if not self._report_path:
+            return
+        self._pdf_btn.configure(state=tk.DISABLED)
+        self._report_status_lbl.configure(
+            text="⏳ Generando PDF...", fg=theme.ACCENT_BLUE)
+        notes = self._final_notes_entry.get().strip() if hasattr(self, "_final_notes_entry") else ""
+        self.run_in_thread(
+            lambda: self._do_generate_pdf(notes),
+            on_done=self._show_pdf_result,
+            on_error=self._pdf_error)
+
+    def _do_generate_pdf(self, notes):
+        import os, datetime
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from config import STATUS_PASSED, STATUS_FAILED, STATUS_SKIPPED, STATUS_PENDING
+
+        home = os.path.expanduser("~")
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_path = os.path.join(home, f"TecoQC_Reporte_{ts}.pdf")
+
+        doc = SimpleDocTemplate(pdf_path, pagesize=A4,
+                                 leftMargin=2*cm, rightMargin=2*cm,
+                                 topMargin=2*cm, bottomMargin=2*cm)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Title
+        title_style = ParagraphStyle("title", parent=styles["Heading1"],
+                                      fontSize=20, textColor=colors.HexColor("#3fa9ff"),
+                                      spaceAfter=8)
+        story.append(Paragraph("TecoQC — Reporte de Control de Calidad", title_style))
+        story.append(Spacer(1, 0.3*cm))
+
+        # Tech info
+        tech = self._state.get("technician_name", "N/D")
+        serial = self._state.get("device_serial", "N/D")
+        model = self._state.get("device_model", "N/D")
+        date = self._state.get("report_date", datetime.date.today().isoformat())
+
+        info_style = ParagraphStyle("info", parent=styles["Normal"],
+                                     fontSize=10, textColor=colors.HexColor("#7ab8d4"))
+        for line in [f"Técnico: {tech}", f"S/N: {serial}", f"Modelo: {model}", f"Fecha: {date}"]:
+            story.append(Paragraph(line, info_style))
+        story.append(Spacer(1, 0.5*cm))
+
+        # Summary counts
+        step_results = self._state.get("step_results", {})
+        counts = {STATUS_PASSED: 0, STATUS_FAILED: 0, STATUS_SKIPPED: 0, STATUS_PENDING: 0}
+        for n in range(1, 15):
+            s = step_results.get(n, {}).get("status", STATUS_PENDING)
+            if s in counts:
+                counts[s] += 1
+
+        summary_data = [
+            ["Aprobados", "Fallidos", "Omitidos", "Pendientes"],
+            [str(counts[STATUS_PASSED]), str(counts[STATUS_FAILED]),
+             str(counts[STATUS_SKIPPED]), str(counts[STATUS_PENDING])],
+        ]
+        summary_table = Table(summary_data, colWidths=[4*cm]*4)
+        summary_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a3a52")),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.HexColor("#d0eeff")),
+            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("BACKGROUND", (0, 1), (0, 1), colors.HexColor("#27c97a")),
+            ("BACKGROUND", (1, 1), (1, 1), colors.HexColor("#ff5c6b")),
+            ("BACKGROUND", (2, 1), (2, 1), colors.HexColor("#f5c542")),
+            ("BACKGROUND", (3, 1), (3, 1), colors.HexColor("#3d7a96")),
+            ("TEXTCOLOR",  (0, 1), (-1, 1), colors.white),
+            ("FONTNAME",   (0, 1), (-1, 1), "Helvetica-Bold"),
+            ("FONTSIZE",   (0, 1), (-1, 1), 16),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.HexColor("#1a3a52"), None]),
+            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#255570")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#255570")),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 0.5*cm))
+
+        # Overall verdict
+        failed = counts[STATUS_FAILED]
+        passed = counts[STATUS_PASSED]
+        skipped = counts[STATUS_SKIPPED]
+        if failed == 0 and passed + skipped == 14:
+            verdict = "✓ APROBADO"
+            v_color = colors.HexColor("#27c97a")
+        elif failed > 0:
+            verdict = f"✗ FALLIDO ({failed} fallo(s))"
+            v_color = colors.HexColor("#ff5c6b")
+        else:
+            verdict = f"● INCOMPLETO"
+            v_color = colors.HexColor("#f5c542")
+
+        verdict_style = ParagraphStyle("verdict", parent=styles["Heading2"],
+                                        fontSize=16, textColor=v_color, spaceAfter=12)
+        story.append(Paragraph(f"Resultado General: {verdict}", verdict_style))
+
+        # Results table
+        STEP_NAMES_PDF = {
+            1: "Bienvenida", 2: "Sistema", 3: "Teclado", 4: "Trackpad",
+            5: "Pantalla", 6: "Cámara", 7: "Puertos USB", 8: "Red",
+            9: "Audio", 10: "CPU", 11: "GPU", 12: "Memoria RAM",
+            13: "Almacenamiento", 14: "Batería",
+        }
+        STATUS_LABELS_PDF = {
+            STATUS_PASSED: "Aprobado", STATUS_FAILED: "Fallido",
+            STATUS_SKIPPED: "Omitido", STATUS_PENDING: "Pendiente",
+        }
+        STATUS_COLORS_PDF = {
+            STATUS_PASSED: colors.HexColor("#27c97a"),
+            STATUS_FAILED: colors.HexColor("#ff5c6b"),
+            STATUS_SKIPPED: colors.HexColor("#f5c542"),
+            STATUS_PENDING: colors.HexColor("#3d7a96"),
+        }
+
+        table_data = [["#", "Componente", "Estado", "Detalles"]]
+        for n in range(1, 15):
+            result = step_results.get(n, {})
+            status = result.get("status", STATUS_PENDING)
+            details = (result.get("details", "") or "")[:50]
+            table_data.append([
+                str(n),
+                STEP_NAMES_PDF.get(n, f"Paso {n}"),
+                STATUS_LABELS_PDF.get(status, status),
+                details,
+            ])
+
+        col_widths = [1*cm, 4.5*cm, 3*cm, 8*cm]
+        results_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+        ts_style = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a3a52")),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.HexColor("#d0eeff")),
+            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",   (0, 0), (-1, 0), 9),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("FONTSIZE", (0, 1), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#255570")),
+        ]
+        for i, n in enumerate(range(1, 15), start=1):
+            result = step_results.get(n, {})
+            status = result.get("status", STATUS_PENDING)
+            bg = colors.HexColor("#0b1f2e") if i % 2 == 0 else colors.HexColor("#112b3f")
+            ts_style.append(("BACKGROUND", (0, i), (-1, i), bg))
+            ts_style.append(("TEXTCOLOR", (2, i), (2, i), STATUS_COLORS_PDF.get(status, colors.white)))
+            ts_style.append(("FONTNAME", (2, i), (2, i), "Helvetica-Bold"))
+
+        results_table.setStyle(TableStyle(ts_style))
+        story.append(results_table)
+
+        # Final notes
+        if notes:
+            story.append(Spacer(1, 0.5*cm))
+            notes_style = ParagraphStyle("notes", parent=styles["Normal"],
+                                          fontSize=9, textColor=colors.HexColor("#7ab8d4"))
+            story.append(Paragraph(f"Observaciones: {notes}", notes_style))
+
+        doc.build(story)
+        return pdf_path
+
+    def _show_pdf_result(self, path):
+        self._pdf_btn.configure(state=tk.NORMAL)
+        self._report_status_lbl.configure(
+            text=f"✓ PDF guardado:\n{path}", fg=theme.SUCCESS)
+        try:
+            import os
+            os.startfile(path)
+        except Exception:
+            pass
+
+    def _pdf_error(self, error):
+        self._pdf_btn.configure(state=tk.NORMAL)
+        self._report_status_lbl.configure(
+            text=f"✗ Error al generar PDF: {error}", fg=theme.ERROR)
