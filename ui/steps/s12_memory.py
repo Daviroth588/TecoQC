@@ -197,10 +197,12 @@ class Step(BaseStep):
                     label_width=16, bg=theme.BG_SURFACE0).pack(fill=tk.X, pady=2)
 
         # Slot details
-        if slots:
-            for slot in slots:
-                if "error" in slot:
-                    continue
+        real_slots = [s for s in slots if "error" not in s]
+        error_slots = [s for s in slots if "error" in s]
+
+        if real_slots:
+            for slot in real_slots:
+                source_tag = " (PowerShell)" if slot.get("source") == "powershell" else ""
                 slot_card = tk.Frame(self._slot_inner, bg=theme.BG_MANTLE,
                                       highlightthickness=1,
                                       highlightbackground=theme.BG_SURFACE2)
@@ -211,7 +213,7 @@ class Step(BaseStep):
                 hdr.pack(fill=tk.X)
                 tk.Label(hdr,
                           text=f"Ranura: {slot.get('device_locator', 'N/D')}  "
-                               f"({slot.get('bank_label', '')})",
+                               f"({slot.get('bank_label', '')}){source_tag}",
                           bg=hdr_bg, fg=theme.TEXT_PRIMARY,
                           font=theme.FONT_BODY_BOLD, padx=10, pady=4).pack(anchor="w")
 
@@ -230,14 +232,32 @@ class Step(BaseStep):
                     InfoRow(inner, lbl, val, label_width=14,
                              bg=theme.BG_MANTLE).pack(fill=tk.X, pady=1)
         else:
+            # Determine best error message to show
+            if error_slots:
+                err_msg = error_slots[-1].get("error", "")
+            else:
+                err_msg = ""
+
+            if err_msg and ("soldada" in err_msg or "LPDDR" in err_msg
+                            or "restricciones" in err_msg or "PowerShell" in err_msg):
+                display_msg = err_msg
+                fg_color = theme.TEXT_SECONDARY
+            else:
+                display_msg = (
+                    "No se pudo obtener información de módulos.\n"
+                    "El equipo puede tener RAM soldada (LPDDR) o "
+                    "restricciones de seguridad WMI."
+                )
+                fg_color = theme.WARNING
+
             tk.Label(self._slot_inner,
-                     text="No se pudo obtener información detallada\nde los módulos via WMI.",
-                     bg=theme.BG_SURFACE0, fg=theme.WARNING,
-                     font=theme.FONT_BODY).pack(anchor="w")
+                     text=display_msg,
+                     bg=theme.BG_SURFACE0, fg=fg_color,
+                     font=theme.FONT_BODY, wraplength=320, justify="left").pack(anchor="w")
 
         total = summary.get("total_gb", 0)
-        type_str = slots[0].get("memory_type", "N/D") if slots else "N/D"
-        speed_str = f"{slots[0].get('speed_mhz', 0)} MHz" if slots else "N/D"
+        type_str = real_slots[0].get("memory_type", "N/D") if real_slots else "N/D"
+        speed_str = f"{real_slots[0].get('speed_mhz', 0)} MHz" if real_slots else "N/D"
         self._set_detail(f"{total:.1f} GB {type_str} {speed_str}")
 
     def _show_error(self, error):
