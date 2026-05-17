@@ -183,13 +183,17 @@ class Step(BaseStep):
         slots = data.get("slots", [])
         array = data.get("array", {})
 
+        # Separate valid slots from error entries up front
+        real_slots = [s for s in slots if "error" not in s]
+        error_slots = [s for s in slots if "error" in s]
+
         # Summary fields
         fields = [
             ("Total", f"{summary.get('total_gb', 0):.2f} GB"),
             ("Disponible", f"{summary.get('available_gb', 0):.2f} GB"),
             ("En uso", f"{summary.get('used_gb', 0):.2f} GB"),
             ("Ranuras totales", str(array.get("memory_devices", "N/D"))),
-            ("Ranuras usadas", str(len(slots))),
+            ("Ranuras usadas", str(len(real_slots))),
             ("Cap. máxima", f"{array.get('max_capacity_gb', 0):.0f} GB"),
         ]
         for label, val in fields:
@@ -197,8 +201,6 @@ class Step(BaseStep):
                     label_width=16, bg=theme.BG_SURFACE0).pack(fill=tk.X, pady=2)
 
         # Slot details
-        real_slots = [s for s in slots if "error" not in s]
-        error_slots = [s for s in slots if "error" in s]
 
         if real_slots:
             for slot in real_slots:
