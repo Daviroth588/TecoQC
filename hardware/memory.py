@@ -64,31 +64,165 @@ def get_physical_memory_array():
     return info
 
 
-def run_memory_test():
-    """Prueba básica de asignación de memoria."""
-    import time
-    result = {"passed": False, "error": None, "allocated_mb": 0, "time_ms": 0}
+def run_memory_test(size_mb=256, progress_cb=None, stop_event=None):
+    """
+    Prueba completa de RAM con múltiples patrones.
+
+    Patrones ejecutados (cada uno escribe toda la región y verifica):
+      1. Ceros     (0x00) — detecta bits pegados en 1
+      2. Unos      (0xFF) — detecta bits pegados en 0
+      3. Alternado (0xAA) — detecta acoplamiento entre bits
+      4. Inverso   (0x55) — complemento del anterior
+      5. Aleatorio         — detecta errores de datos no predecibles
+      6. Dirección         — cada byte contiene su dirección (mod 256)
+
+    progress_cb(phase_name, phase_index, total_phases, phase_pct, errors_so_far)
+    stop_event: threading.Event — si se activa, cancela la prueba.
+    """
+    import time, random, struct
+
+    PATTERNS = [
+        ("Ceros (0x00)",      bytes([0x00])),
+        ("Unos (0xFF)",       bytes([0xFF])),
+        ("Alternado (0xAA)",  bytes([0xAA])),
+        ("Inverso (0x55)",    bytes([0x55])),
+        ("Aleatorio",         None),          # None → generado dinámicamente
+        ("Dirección",         None),          # None → i % 256 por chunk
+    ]
+
+    total_phases = len(PATTERNS)
+    size_bytes   = size_mb * 1024 * 1024
+    chunk        = 4096          # bytes por verificación granular
+    total_errors = 0
+    phase_results = []
+
+    result = {
+        "passed":        False,
+        "error":         None,
+        "allocated_mb":  size_mb,
+        "time_ms":       0,
+        "total_errors":  0,
+        "phases":        [],
+        "cancelled":     False,
+    }
+
+    def _cb(name, idx, pct, errs):
+        if progress_cb:
+            try:
+                progress_cb(name, idx, total_phases, pct, errs)
+            except Exception:
+                pass
+
+    def _stopped():
+        return stop_event is not None and stop_event.is_set()
+
+    start_all = time.time()
+
     try:
-        test_size = 256 * 1024 * 1024  # 256 MB
-        start = time.time()
-        data = bytearray(test_size)
-        # Write pattern
-        for i in range(0, test_size, 4096):
-            data[i] = 0xAA
-        # Read/verify pattern
-        for i in range(0, test_size, 4096):
-            if data[i] != 0xAA:
-                result["error"] = f"Error de verificación en offset {i}"
-                return result
-        del data
-        elapsed_ms = round((time.time() - start) * 1000)
-        result["passed"] = True
-        result["allocated_mb"] = test_size // (1024 * 1024)
-        result["time_ms"] = elapsed_ms
-    except MemoryError as e:
-        result["error"] = f"Sin memoria suficiente: {e}"
+        buf = bytearray(size_bytes)
+    except MemoryError:
+        # If full size fails, try half
+        try:
+            size_mb  = size_mb // 2
+            size_bytes = size_mb * 1024 * 1024
+            buf = bytearray(size_bytes)
+            result["allocated_mb"] = size_mb
+        except MemoryError as e:
+            result["error"] = f"Memoria insuficiente para la prueba: {e}"
+            return result
+
+    try:
+        for phase_idx, (name, pattern) in enumerate(PATTERNS):
+            if _stopped():
+                result["cancelled"] = True
+                break
+
+            phase_errors = 0
+            phase_start  = time.time()
+
+            # ── Build write data ──────────────────────────────────────
+            if pattern is not None:
+                # Repeat fixed byte
+                fill_byte = pattern[0]
+                for i in range(size_bytes):
+                    buf[i] = fill_byte
+            elif name.startswith("Aleat"):
+                # Random fill (use struct for speed on large buffers)
+                rng = random.Random(0xDEADBEEF)
+                rand_chunk = 65536
+                for off in range(0, size_bytes, rand_chunk):
+                    end = min(off + rand_chunk, size_bytes)
+                    length = end - off
+                    rand_bytes = bytes(rng.getrandbits(8) for _ in range(length))
+                    buf[off:end] = rand_bytes
+            else:
+                # Address pattern: buf[i] = i % 256
+                for i in range(size_bytes):
+                    buf[i] = i & 0xFF
+
+            _cb(name, phase_idx, 0.0, total_errors)
+
+            # ── Verify ────────────────────────────────────────────────
+            if pattern is not None:
+                expected = pattern[0]
+                for off in range(0, size_bytes, chunk):
+                    if _stopped():
+                        break
+                    end = min(off + chunk, size_bytes)
+                    for i in range(off, end):
+                        if buf[i] != expected:
+                            phase_errors += 1
+                    pct = (off + chunk) / size_bytes
+                    _cb(name, phase_idx, min(pct, 1.0), total_errors + phase_errors)
+
+            elif name.startswith("Aleat"):
+                rng2 = random.Random(0xDEADBEEF)
+                rand_chunk = 65536
+                for off in range(0, size_bytes, rand_chunk):
+                    if _stopped():
+                        break
+                    end = min(off + rand_chunk, size_bytes)
+                    length = end - off
+                    expected_bytes = bytes(rng2.getrandbits(8) for _ in range(length))
+                    for j, (got, exp) in enumerate(zip(buf[off:end], expected_bytes)):
+                        if got != exp:
+                            phase_errors += 1
+                    pct = (off + rand_chunk) / size_bytes
+                    _cb(name, phase_idx, min(pct, 1.0), total_errors + phase_errors)
+
+            else:  # Address
+                for off in range(0, size_bytes, chunk):
+                    if _stopped():
+                        break
+                    end = min(off + chunk, size_bytes)
+                    for i in range(off, end):
+                        if buf[i] != (i & 0xFF):
+                            phase_errors += 1
+                    pct = (off + chunk) / size_bytes
+                    _cb(name, phase_idx, min(pct, 1.0), total_errors + phase_errors)
+
+            phase_ms = round((time.time() - phase_start) * 1000)
+            total_errors += phase_errors
+            phase_results.append({
+                "name":    name,
+                "errors":  phase_errors,
+                "time_ms": phase_ms,
+                "passed":  phase_errors == 0,
+            })
+
+            _cb(name, phase_idx, 1.0, total_errors)
+
     except Exception as e:
         result["error"] = str(e)
+    finally:
+        del buf
+
+    elapsed_ms = round((time.time() - start_all) * 1000)
+    result["time_ms"]      = elapsed_ms
+    result["total_errors"] = total_errors
+    result["phases"]       = phase_results
+    result["passed"]       = (total_errors == 0 and not result["cancelled"]
+                               and result["error"] is None)
     return result
 
 

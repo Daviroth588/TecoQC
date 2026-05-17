@@ -81,7 +81,7 @@ class Step(BaseStep):
         test_card = Card(parent)
         test_card.pack(fill=tk.X, pady=(8, 0))
 
-        tk.Label(test_card, text="Prueba de Asignación de Memoria",
+        tk.Label(test_card, text="Prueba de Integridad de Memoria",
                  bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
                  font=theme.FONT_H3).pack(anchor="w", padx=16, pady=(12, 6))
         tk.Frame(test_card, height=1, bg=theme.BG_SURFACE2).pack(fill=tk.X, padx=16)
@@ -90,24 +90,70 @@ class Step(BaseStep):
         test_inner.pack(fill=tk.X, padx=16, pady=10)
 
         tk.Label(test_inner,
-                 text="Asigna 256 MB de memoria, escribe un patrón y verifica que sea correcto.\n"
-                      "Esta es una prueba básica — no reemplaza pruebas completas (MemTest86).",
+                 text="Escribe 6 patrones distintos en memoria y verifica que los datos leídos "
+                      "coincidan exactamente. Detecta bits pegados, errores de datos y fallas de "
+                      "direccionamiento.",
                  bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_BODY, justify="left").pack(anchor="w", pady=(0, 10))
+                 font=theme.FONT_BODY, wraplength=700, justify="left").pack(anchor="w", pady=(0, 8))
+
+        # Size selector
+        size_row = tk.Frame(test_inner, bg=theme.BG_SURFACE0)
+        size_row.pack(anchor="w", pady=(0, 8))
+
+        tk.Label(size_row, text="Tamaño:", bg=theme.BG_SURFACE0,
+                 fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY).pack(side=tk.LEFT, padx=(0, 10))
+
+        self._test_size_var = tk.IntVar(value=256)
+        for label, mb in [("64 MB", 64), ("128 MB", 128), ("256 MB", 256), ("512 MB", 512)]:
+            tk.Radiobutton(
+                size_row, text=label, variable=self._test_size_var, value=mb,
+                bg=theme.BG_SURFACE0, fg=theme.TEXT_PRIMARY,
+                selectcolor=theme.BG_SURFACE1,
+                activebackground=theme.BG_SURFACE0,
+                font=theme.FONT_BODY, indicatoron=0,
+                relief="flat", padx=10, pady=4, cursor="hand2",
+            ).pack(side=tk.LEFT, padx=3)
 
         btn_row = tk.Frame(test_inner, bg=theme.BG_SURFACE0)
-        btn_row.pack(anchor="w")
+        btn_row.pack(anchor="w", pady=(0, 8))
 
         self._test_btn = tk.Button(btn_row, text="▶  Iniciar prueba de memoria",
                                     command=self._run_mem_test, **theme.BTN_PRIMARY)
         self._test_btn.pack(side=tk.LEFT, padx=(0, 12))
 
+        self._stop_btn = tk.Button(btn_row, text="■  Detener",
+                                    command=self._stop_mem_test, **theme.BTN_SECONDARY,
+                                    state=tk.DISABLED)
+        self._stop_btn.pack(side=tk.LEFT)
+
+        # Current phase label
+        self._phase_lbl = tk.Label(test_inner, text="",
+                                    bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
+                                    font=theme.FONT_BODY_BOLD)
+        self._phase_lbl.pack(anchor="w")
+
+        # Overall progress bar
+        prog_wrap = tk.Frame(test_inner, bg=theme.BG_SURFACE1,
+                              highlightthickness=1, highlightbackground=theme.BG_SURFACE2)
+        prog_wrap.pack(fill=tk.X, pady=(4, 8))
+        self._prog_canvas = tk.Canvas(prog_wrap, height=18, bg=theme.BG_SURFACE1,
+                                       highlightthickness=0)
+        self._prog_canvas.pack(fill=tk.X)
+
+        # Phase results table (shown after test)
+        self._results_frame = tk.Frame(test_inner, bg=theme.BG_SURFACE0)
+        self._results_frame.pack(fill=tk.X)
+
         self._test_lbl = tk.Label(test_inner, text="",
                                    bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
                                    font=theme.FONT_BODY)
-        self._test_lbl.pack(anchor="w", pady=(8, 0))
+        self._test_lbl.pack(anchor="w", pady=(4, 0))
 
-        # Load data
+        # Internal state
+        self._stop_event = None
+        self._test_running = False
+
+        # Load hardware data
         self.run_in_thread(self._collect, on_done=self._show_info,
                             on_error=self._show_error)
 
@@ -237,30 +283,145 @@ class Step(BaseStep):
                                    fill=theme.BG_BASE, font=theme.FONT_SMALL)
 
     def _run_mem_test(self):
+        import threading
         self._test_btn.configure(state=tk.DISABLED)
-        self._test_lbl.configure(text="⏳ Ejecutando prueba... (puede tardar unos segundos)",
-                                   fg=theme.ACCENT_BLUE)
-        self.run_in_thread(self._do_mem_test, on_done=self._show_mem_result,
-                            on_error=lambda e: self._mem_error(e))
+        self._stop_btn.configure(state=tk.NORMAL)
+        self._test_lbl.configure(text="")
+        # Clear previous results
+        for w in self._results_frame.winfo_children():
+            w.destroy()
+        self._draw_progress(0, "")
+        self._phase_lbl.configure(text="⏳ Iniciando prueba...")
+        self._test_running = True
+        self._stop_event = threading.Event()
+        threading.Thread(target=self._do_mem_test, daemon=True).start()
+
+    def _stop_mem_test(self):
+        if self._stop_event:
+            self._stop_event.set()
+        self._stop_btn.configure(state=tk.DISABLED)
+        self._phase_lbl.configure(text="⏹ Deteniendo...", fg=theme.WARNING)
 
     def _do_mem_test(self):
         from hardware.memory import run_memory_test
-        return run_memory_test()
+        size_mb = self._test_size_var.get()
+
+        def on_progress(phase_name, phase_idx, total_phases, phase_pct, errors_so_far):
+            # overall fraction: finished phases + current phase progress
+            overall = (phase_idx + phase_pct) / total_phases
+            error_txt = f"  —  Errores: {errors_so_far}" if errors_so_far else ""
+            label = f"Patrón {phase_idx + 1}/{total_phases}: {phase_name}{error_txt}"
+            self.after(0, lambda l=label, p=overall: self._update_progress(l, p))
+
+        result = run_memory_test(
+            size_mb=size_mb,
+            progress_cb=on_progress,
+            stop_event=self._stop_event,
+        )
+        self.after(0, lambda r=result: self._show_mem_result(r))
+
+    def _update_progress(self, label, fraction):
+        self._phase_lbl.configure(text=label, fg=theme.ACCENT_BLUE)
+        self._draw_progress(fraction, label)
+
+    def _draw_progress(self, fraction, label):
+        canvas = self._prog_canvas
+        w = canvas.winfo_width() or 500
+        h = 18
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, w, h, fill=theme.BG_SURFACE1, outline="")
+        fw = int(w * fraction)
+        if fw > 0:
+            color = theme.SUCCESS if fraction >= 1.0 else theme.ACCENT_BLUE
+            canvas.create_rectangle(0, 0, fw, h, fill=color, outline="")
+        pct_txt = f"{int(fraction * 100)}%"
+        canvas.create_text(w // 2, h // 2, text=pct_txt,
+                            fill=theme.BG_BASE, font=theme.FONT_SMALL)
 
     def _show_mem_result(self, result):
+        self._test_running = False
         self._test_btn.configure(state=tk.NORMAL)
-        if result.get("passed"):
-            mb = result.get("allocated_mb", 0)
-            ms = result.get("time_ms", 0)
-            self._test_lbl.configure(
-                text=f"✓ Prueba exitosa — {mb} MB asignados y verificados en {ms} ms",
+        self._stop_btn.configure(state=tk.DISABLED)
+
+        if result.get("cancelled"):
+            self._phase_lbl.configure(text="⏹ Prueba cancelada por el usuario",
+                                       fg=theme.WARNING)
+            self._draw_progress(0, "")
+            return
+
+        if result.get("error"):
+            self._phase_lbl.configure(text=f"✗ Error: {result['error']}", fg=theme.ERROR)
+            self.set_status(STATUS_FAILED, f"Error en prueba RAM: {result['error']}")
+            return
+
+        phases      = result.get("phases", [])
+        total_errs  = result.get("total_errors", 0)
+        elapsed_ms  = result.get("time_ms", 0)
+        size_mb     = result.get("allocated_mb", 0)
+        passed      = result.get("passed", False)
+
+        # Draw final full bar
+        self._draw_progress(1.0, "")
+
+        # Header label
+        if passed:
+            self._phase_lbl.configure(
+                text=f"✓ Sin errores — {size_mb} MB probados en "
+                     f"{elapsed_ms/1000:.1f} s — 6/6 patrones OK",
                 fg=theme.SUCCESS)
-            self.set_status(STATUS_PASSED, f"RAM OK: prueba {mb}MB en {ms}ms")
         else:
-            err = result.get("error", "Error desconocido")
-            self._test_lbl.configure(text=f"✗ Prueba fallida: {err}", fg=theme.ERROR)
-            self.set_status(STATUS_FAILED, f"Fallo en prueba de RAM: {err}")
+            self._phase_lbl.configure(
+                text=f"✗ Se encontraron {total_errs} error(es) en la memoria",
+                fg=theme.ERROR)
+
+        # Phase results table
+        for w in self._results_frame.winfo_children():
+            w.destroy()
+
+        # Table header
+        hdr = tk.Frame(self._results_frame, bg=theme.BG_SURFACE1)
+        hdr.pack(fill=tk.X, pady=(6, 0))
+        for txt, w_ in [("Patrón", 200), ("Errores", 80), ("Tiempo", 90), ("Estado", 80)]:
+            tk.Label(hdr, text=txt, bg=theme.BG_SURFACE1, fg=theme.TEXT_MUTED,
+                     font=theme.FONT_SMALL, width=w_//7, anchor="w",
+                     padx=8, pady=4).pack(side=tk.LEFT)
+
+        # Table rows
+        for i, ph in enumerate(phases):
+            row_bg = theme.BG_MANTLE if i % 2 == 0 else theme.BG_SURFACE0
+            row = tk.Frame(self._results_frame, bg=row_bg)
+            row.pack(fill=tk.X)
+            errs  = ph["errors"]
+            ok    = ph["passed"]
+            color = theme.SUCCESS if ok else theme.ERROR
+            icon  = "✓" if ok else "✗"
+            for txt, w_ in [
+                (ph["name"],          200),
+                (str(errs),            80),
+                (f"{ph['time_ms']} ms", 90),
+                (f"{icon} {'OK' if ok else 'FALLO'}", 80),
+            ]:
+                tk.Label(row, text=txt, bg=row_bg,
+                         fg=color if txt.startswith(icon) else theme.TEXT_PRIMARY,
+                         font=theme.FONT_SMALL, width=w_//7, anchor="w",
+                         padx=8, pady=3).pack(side=tk.LEFT)
+
+        # Summary label
+        if passed:
+            self.set_status(STATUS_PASSED,
+                             f"RAM OK — {size_mb} MB, 6 patrones, 0 errores, {elapsed_ms/1000:.1f}s")
+            self._test_lbl.configure(
+                text="La memoria no presenta errores en ninguno de los 6 patrones de prueba.",
+                fg=theme.SUCCESS)
+        else:
+            self.set_status(STATUS_FAILED,
+                             f"RAM: {total_errs} error(es) detectados en {size_mb} MB")
+            self._test_lbl.configure(
+                text=f"⚠ Se detectaron {total_errs} error(es). "
+                     "Recomendado: reemplazar módulo o ejecutar MemTest86 para confirmación.",
+                fg=theme.ERROR)
 
     def _mem_error(self, error):
         self._test_btn.configure(state=tk.NORMAL)
+        self._stop_btn.configure(state=tk.DISABLED)
         self._test_lbl.configure(text=f"Error: {error}", fg=theme.ERROR)
