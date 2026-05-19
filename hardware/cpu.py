@@ -2,6 +2,7 @@
 TecoQC - Información de CPU, temperatura y uso
 """
 
+import os
 import platform
 import subprocess
 

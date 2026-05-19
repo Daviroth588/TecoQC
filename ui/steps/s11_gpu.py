@@ -24,6 +24,7 @@ class Step(BaseStep):
 
     def build_ui(self, parent):
         self._3d_running = False
+        self._monitoring = False
 
         self._spinner = Spinner(parent, text="Detectando GPUs...", bg=theme.BG_BASE)
         self._spinner.pack(pady=30)
@@ -40,6 +41,7 @@ class Step(BaseStep):
     def on_leave(self):
         super().on_leave()
         self._3d_running = False
+        self._monitoring = False
 
     def _collect(self):
         from hardware.gpu import get_all_gpu_info
@@ -135,11 +137,156 @@ class Step(BaseStep):
             self.set_status(STATUS_FAILED, "No se detectaron GPUs")
             return
 
-        # Build 2D rendering test section
+        # Real-time monitor card
+        self._build_monitor_card()
+
+        # Build rendering test section
         self._build_render_test()
 
         count = len([g for g in wmi_gpus if "error" not in g]) if wmi_gpus else len(nvidia.get("gpus", []))
         self._set_detail(f"{count} GPU(s) detectada(s) — ejecute test de renderizado")
+
+        # Start real-time monitoring
+        self._monitoring = True
+        threading.Thread(target=self._monitor_loop, daemon=True).start()
+
+    def _build_monitor_card(self):
+        from ui.components import Card
+        mon_card = Card(self._content)
+        mon_card.pack(fill=tk.X, pady=(0, 8))
+
+        hdr = tk.Frame(mon_card, bg=theme.BG_SURFACE1)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text="Monitor en Tiempo Real",
+                 bg=theme.BG_SURFACE1, fg=theme.TEXT_PRIMARY,
+                 font=theme.FONT_H3, padx=16, pady=6).pack(side=tk.LEFT)
+
+        inner = tk.Frame(mon_card, bg=theme.BG_SURFACE0)
+        inner.pack(fill=tk.X, padx=16, pady=8)
+
+        # GPU utilization bar
+        util_row = tk.Frame(inner, bg=theme.BG_SURFACE0)
+        util_row.pack(fill=tk.X, pady=2)
+        tk.Label(util_row, text="Uso GPU:", bg=theme.BG_SURFACE0,
+                 fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY,
+                 width=14, anchor="w").pack(side=tk.LEFT)
+        self._gpu_bar = tk.Canvas(util_row, height=20, bg=theme.BG_SURFACE1,
+                                   highlightthickness=0)
+        self._gpu_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
+        self._gpu_pct_lbl = tk.Label(util_row, text="—",
+                                      bg=theme.BG_SURFACE0, fg=theme.TEXT_PRIMARY,
+                                      font=theme.FONT_BODY_BOLD, width=6)
+        self._gpu_pct_lbl.pack(side=tk.LEFT)
+
+        # VRAM bar
+        vram_row = tk.Frame(inner, bg=theme.BG_SURFACE0)
+        vram_row.pack(fill=tk.X, pady=2)
+        tk.Label(vram_row, text="VRAM usada:", bg=theme.BG_SURFACE0,
+                 fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY,
+                 width=14, anchor="w").pack(side=tk.LEFT)
+        self._vram_bar = tk.Canvas(vram_row, height=20, bg=theme.BG_SURFACE1,
+                                    highlightthickness=0)
+        self._vram_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
+        self._vram_lbl = tk.Label(vram_row, text="—",
+                                   bg=theme.BG_SURFACE0, fg=theme.TEXT_PRIMARY,
+                                   font=theme.FONT_BODY_BOLD, width=10)
+        self._vram_lbl.pack(side=tk.LEFT)
+
+        # Temperature
+        temp_row = tk.Frame(inner, bg=theme.BG_SURFACE0)
+        temp_row.pack(fill=tk.X, pady=2)
+        tk.Label(temp_row, text="Temperatura:", bg=theme.BG_SURFACE0,
+                 fg=theme.TEXT_SECONDARY, font=theme.FONT_BODY,
+                 width=14, anchor="w").pack(side=tk.LEFT)
+        self._gpu_temp_lbl = tk.Label(temp_row, text="N/D",
+                                       bg=theme.BG_SURFACE0, fg=theme.TEXT_PRIMARY,
+                                       font=theme.FONT_BODY_BOLD)
+        self._gpu_temp_lbl.pack(side=tk.LEFT, padx=8)
+
+        # Usage graph
+        tk.Label(inner, text="Historial de uso GPU (último minuto):",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_SMALL).pack(anchor="w", pady=(8, 2))
+        self._gpu_graph = tk.Canvas(inner, height=80, bg=theme.BG_CRUST,
+                                     highlightthickness=1,
+                                     highlightbackground=theme.BG_SURFACE2)
+        self._gpu_graph.pack(fill=tk.X)
+        self._gpu_history = [0.0] * 60
+
+    def _draw_gpu_bar(self, canvas, pct, label_widget, text):
+        w = canvas.winfo_width() or 200
+        h = 20
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, w, h, fill=theme.BG_SURFACE1, outline="")
+        fw = int(w * min(pct, 100) / 100)
+        if fw > 0:
+            color = (theme.SUCCESS if pct < 60 else theme.WARNING if pct < 85 else theme.ERROR)
+            canvas.create_rectangle(0, 0, fw, h, fill=color, outline="")
+        canvas.create_text(w // 2, h // 2, text=f"{pct:.1f}%",
+                           fill=theme.BG_BASE, font=theme.FONT_SMALL)
+        label_widget.configure(text=text)
+
+    def _draw_gpu_graph(self):
+        canvas = self._gpu_graph
+        w = canvas.winfo_width() or 400
+        h = 80
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, w, h, fill=theme.BG_CRUST, outline="")
+        for pct in [25, 50, 75]:
+            y = h - (pct / 100 * h)
+            canvas.create_line(0, y, w, y, fill=theme.BG_SURFACE1, dash=(2, 4))
+            canvas.create_text(3, y - 6, text=f"{pct}%", anchor="nw",
+                               fill=theme.TEXT_MUTED, font=(theme.FONT_FAMILY, 7))
+        points = self._gpu_history
+        step = w / max(len(points) - 1, 1)
+        coords = []
+        for i, val in enumerate(points):
+            coords.extend([i * step, h - (val / 100 * h)])
+        if len(coords) >= 4:
+            canvas.create_line(*coords, fill=theme.ACCENT_BLUE, width=2, smooth=True)
+
+    def _monitor_loop(self):
+        import time
+        while self._monitoring:
+            try:
+                from hardware.gpu import get_gpu_live_stats
+                stats = get_gpu_live_stats()
+                entries = stats.get("entries", [])
+                if entries:
+                    e = entries[0]
+                    gpu_pct = e.get("gpu_pct", 0)
+                    vram_used = e.get("vram_used_mb", 0)
+                    vram_total = e.get("vram_total_mb", 0)
+                    temp_c = e.get("temp_c")
+                    vram_pct = (vram_used / vram_total * 100) if vram_total > 0 else 0
+
+                    def update(gp=gpu_pct, vp=vram_pct, vu=vram_used, vt=vram_total, tc=temp_c):
+                        if not self._monitoring:
+                            return
+                        try:
+                            self._draw_gpu_bar(self._gpu_bar, gp,
+                                               self._gpu_pct_lbl, f"{gp:.1f}%")
+                            vram_text = (f"{vu} / {vt} MB" if vt > 0 else "N/D")
+                            self._draw_gpu_bar(self._vram_bar, vp,
+                                               self._vram_lbl, vram_text)
+                            if tc is not None:
+                                temp_color = (theme.ERROR if tc >= 85 else
+                                              theme.WARNING if tc >= 70 else theme.SUCCESS)
+                                self._gpu_temp_lbl.configure(
+                                    text=f"{tc:.1f}°C", fg=temp_color)
+                            else:
+                                self._gpu_temp_lbl.configure(text="N/D",
+                                                              fg=theme.TEXT_MUTED)
+                            self._gpu_history.pop(0)
+                            self._gpu_history.append(gp)
+                            self._draw_gpu_graph()
+                        except Exception:
+                            pass
+
+                    self.after(0, update)
+            except Exception:
+                pass
+            time.sleep(2)
 
     def _build_render_test(self):
         render_card = Card(self._content)

@@ -120,6 +120,130 @@ def get_gpu_temperature_wmi():
     return temps
 
 
+def get_gpu_utilization():
+    """
+    Retorna dict {gpu_name: utilization_pct} para cada GPU.
+    Fuentes: nvidia-smi → Win32_PerfFormattedData (Windows 10+) → N/D
+    """
+    result = {}
+
+    # 1. NVIDIA via nvidia-smi (más confiable)
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=name,utilization.gpu,utilization.memory",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if proc.returncode == 0:
+            for line in proc.stdout.strip().splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 2:
+                    name = parts[0]
+                    util = _safe_float(parts[1])
+                    result[name] = {"gpu_pct": util,
+                                    "mem_pct": _safe_float(parts[2]) if len(parts) > 2 else 0}
+    except Exception:
+        pass
+
+    # 2. Windows Performance Counters (AMD + Intel, Windows 10+)
+    if not result:
+        try:
+            import wmi
+            c = wmi.WMI()
+            perf = c.Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine()
+            totals = {}
+            for item in perf:
+                name = item.Name or ""
+                # Name: "pid_XXX_luid_0xXXX_phys_0_eng_0_engtype_3D"
+                if "engtype_3D" in name or "engtype_Graphics" in name:
+                    util = item.UtilizationPercentage
+                    if util is not None:
+                        # Extract physical adapter index from name
+                        phys = "0"
+                        for part in name.split("_"):
+                            if part.isdigit():
+                                phys = part
+                                break
+                        key = f"GPU {phys}"
+                        totals[key] = totals.get(key, 0) + float(util)
+            for key, val in totals.items():
+                result[key] = {"gpu_pct": min(100.0, val), "mem_pct": 0}
+        except Exception:
+            pass
+
+    return result
+
+
+def get_gpu_live_stats():
+    """
+    Retorna stats en tiempo real: utilización, temperatura, VRAM.
+    Usado para el monitor en tiempo real del panel GPU.
+    """
+    stats = {"entries": []}
+    util = get_gpu_utilization()
+
+    # NVIDIA: usa nvidia-smi para datos completos en un solo call
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=name,utilization.gpu,utilization.memory,"
+             "memory.used,memory.total,temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if proc.returncode == 0:
+            for line in proc.stdout.strip().splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 6:
+                    stats["entries"].append({
+                        "name": parts[0],
+                        "gpu_pct": _safe_float(parts[1]),
+                        "mem_pct": _safe_float(parts[2]),
+                        "vram_used_mb": _safe_int(parts[3]),
+                        "vram_total_mb": _safe_int(parts[4]),
+                        "temp_c": _safe_float(parts[5]),
+                        "source": "nvidia-smi",
+                    })
+    except Exception:
+        pass
+
+    # AMD/Intel: combinar WMI VideoController + utilización de Performance Counters
+    if not stats["entries"]:
+        try:
+            import wmi
+            c = wmi.WMI()
+            for a in c.Win32_VideoController():
+                name = (a.Name or "GPU").strip()
+                if _is_virtual_adapter(name):
+                    continue
+                entry = {
+                    "name": name,
+                    "gpu_pct": 0.0,
+                    "mem_pct": 0.0,
+                    "vram_used_mb": 0,
+                    "vram_total_mb": _bytes_to_mb(a.AdapterRAM),
+                    "temp_c": None,
+                    "source": "wmi",
+                }
+                # Look up utilization from Performance Counters
+                for key, val in util.items():
+                    entry["gpu_pct"] = val.get("gpu_pct", 0)
+                    break
+                stats["entries"].append(entry)
+        except Exception:
+            pass
+
+        # Temperature from OHM if available
+        temps = get_gpu_temperature_wmi()
+        if temps and stats["entries"]:
+            for key, val in temps.items():
+                stats["entries"][0]["temp_c"] = val
+                break
+
+    return stats
+
+
 def get_all_gpu_info():
     """Recopila toda la información de GPU disponible."""
     result = {
