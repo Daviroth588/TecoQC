@@ -214,18 +214,21 @@ def ping_host(host="8.8.8.8", count=4):
         result["output"] = proc.stdout
         if proc.returncode == 0:
             result["reachable"] = True
-            # Parse average RTT
-            match = re.search(r"Media\s*=\s*(\d+)ms|Average\s*=\s*(\d+)ms",
-                               proc.stdout)
+            # Parse average RTT (Spanish: "Media = Xms", English: "Average = Xms")
+            match = re.search(
+                r"(?:Media|Average)\s*[=:]\s*(\d+)\s*ms",
+                proc.stdout, re.IGNORECASE)
             if match:
-                val = match.group(1) or match.group(2)
-                result["avg_ms"] = int(val)
-            # Parse packets received
-            match2 = re.search(r"Recibidos\s*=\s*(\d+)|Received\s*=\s*(\d+)",
-                                proc.stdout)
+                result["avg_ms"] = int(match.group(1))
+            # Parse packets received (Spanish: "Recibidos = X", English: "Received = X")
+            match2 = re.search(
+                r"(?:Recibidos|Received)\s*[=:]\s*(\d+)",
+                proc.stdout, re.IGNORECASE)
             if match2:
-                val2 = match2.group(1) or match2.group(2)
-                result["packets_received"] = int(val2)
+                result["packets_received"] = int(match2.group(1))
+            else:
+                # Fallback: assume all packets received if ping succeeded
+                result["packets_received"] = count
         else:
             result["error"] = "Host inalcanzable"
     except subprocess.TimeoutExpired:

@@ -30,6 +30,9 @@ pyinstaller --onefile --windowed --name TecoQC ^
     --hidden-import=win32com.client ^
     --hidden-import=win32api ^
     --hidden-import=win32con ^
+    --hidden-import=win32security ^
+    --hidden-import=win32process ^
+    --hidden-import=pywintypes ^
     --hidden-import=psutil ^
     --hidden-import=PIL ^
     --hidden-import=PIL.Image ^
@@ -37,13 +40,20 @@ pyinstaller --onefile --windowed --name TecoQC ^
     --hidden-import=reportlab ^
     --hidden-import=reportlab.graphics.barcode ^
     --hidden-import=reportlab.graphics.barcode.code128 ^
+    --hidden-import=reportlab.lib.pagesizes ^
+    --hidden-import=reportlab.platypus ^
     --hidden-import=cv2 ^
     --hidden-import=sounddevice ^
+    --hidden-import=soundfile ^
     --hidden-import=numpy ^
+    --hidden-import=numpy.core ^
     --hidden-import=sqlite3 ^
+    --hidden-import=xml.etree.ElementTree ^
+    --hidden-import=concurrent.futures ^
+    --hidden-import=winsound ^
     --hidden-import=clr ^
     --collect-all reportlab ^
-    --collect-all pythonnet ^
+    --collect-all sounddevice ^
     --uac-admin ^
     main.py
 

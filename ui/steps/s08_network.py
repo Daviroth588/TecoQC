@@ -499,18 +499,27 @@ class Step(BaseStep):
 
     def _do_download(self):
         import urllib.request, time
-        url = "http://speedtest.tele2.net/1MB.zip"
-        try:
-            t0 = time.time()
-            req = urllib.request.Request(url, headers={"User-Agent": "TecoQC/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = resp.read()
-            elapsed = time.time() - t0
-            size_mb = len(data) / (1024 * 1024)
-            speed_mb_s = size_mb / elapsed if elapsed > 0 else 0
-            return {"ok": True, "speed_mb_s": speed_mb_s, "size_mb": size_mb}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        # Use Cloudflare CDN — low latency, reliable for speed tests
+        candidates = [
+            ("https://speed.cloudflare.com/__down?bytes=5242880", 5.0),   # 5 MB
+            ("http://cachefly.cachefly.net/5mb.zip", 5.0),                 # 5 MB fallback
+            ("http://speedtest.tele2.net/1MB.zip", 1.0),                   # 1 MB last resort
+        ]
+        for url, expected_mb in candidates:
+            try:
+                t0 = time.time()
+                req = urllib.request.Request(url, headers={"User-Agent": "TecoQC/1.0"})
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    data = resp.read()
+                elapsed = time.time() - t0
+                if elapsed < 0.1:
+                    continue
+                size_mb = len(data) / (1024 * 1024)
+                speed_mb_s = size_mb / elapsed
+                return {"ok": True, "speed_mb_s": speed_mb_s, "size_mb": size_mb}
+            except Exception:
+                continue
+        return {"ok": False, "error": "No se pudo conectar a ningún servidor de prueba"}
 
     def _show_download(self, result):
         self._dl_spinner.stop()

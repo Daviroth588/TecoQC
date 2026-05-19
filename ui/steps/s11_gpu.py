@@ -1,10 +1,11 @@
 """
-TecoQC - Paso 11: Información de GPU + test de renderizado 2D
+TecoQC - Paso 11: Información de GPU + test de renderizado 2D y 3D
 """
 
 import tkinter as tk
 import time
 import threading
+import math
 from ui.steps.base_step import BaseStep
 from ui.components import Card, InfoRow, Spinner
 from ui import theme
@@ -22,6 +23,8 @@ class Step(BaseStep):
     STEP_NUM = 11
 
     def build_ui(self, parent):
+        self._3d_running = False
+
         self._spinner = Spinner(parent, text="Detectando GPUs...", bg=theme.BG_BASE)
         self._spinner.pack(pady=30)
         self._spinner.start()
@@ -30,8 +33,13 @@ class Step(BaseStep):
         self._content.pack(fill=tk.BOTH, expand=True)
 
     def on_enter(self):
+        self._3d_running = False
         self.run_in_thread(self._collect, on_done=self._show,
                             on_error=self._show_error)
+
+    def on_leave(self):
+        super().on_leave()
+        self._3d_running = False
 
     def _collect(self):
         from hardware.gpu import get_all_gpu_info
@@ -139,36 +147,74 @@ class Step(BaseStep):
 
         hdr = tk.Frame(render_card, bg=theme.BG_SURFACE1)
         hdr.pack(fill=tk.X)
-        tk.Label(hdr, text="Test de Renderizado 2D",
+        tk.Label(hdr, text="Tests de Renderizado",
                  bg=theme.BG_SURFACE1, fg=theme.TEXT_PRIMARY,
                  font=theme.FONT_H3, padx=16, pady=8).pack(side=tk.LEFT)
 
         inner = tk.Frame(render_card, bg=theme.BG_SURFACE0)
         inner.pack(fill=tk.X, padx=16, pady=10)
 
-        tk.Label(inner,
-                 text=f"Dibuja {RENDER_SHAPES} formas en canvas y mide el tiempo. "
-                      f"Aprobado si completa en < {RENDER_MAX_MS} ms.",
+        # Two columns: 2D and 3D tests
+        test_cols = tk.Frame(inner, bg=theme.BG_SURFACE0)
+        test_cols.pack(fill=tk.X)
+        test_cols.columnconfigure(0, weight=1)
+        test_cols.columnconfigure(1, weight=1)
+
+        # ── 2D Test ───────────────────────────────────────────────────
+        col2d = tk.Frame(test_cols, bg=theme.BG_SURFACE0,
+                          highlightthickness=1, highlightbackground=theme.BG_SURFACE1)
+        col2d.grid(row=0, column=0, padx=(0, 6), sticky="nsew")
+
+        tk.Label(col2d, text="Test 2D — Formas en canvas",
+                 bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
+                 font=theme.FONT_BODY_BOLD, padx=10, pady=6).pack(anchor="w")
+        tk.Label(col2d,
+                 text=f"Dibuja {RENDER_SHAPES} figuras.\nAprobado si < {RENDER_MAX_MS} ms.",
                  bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_BODY).pack(anchor="w", pady=(0, 8))
+                 font=theme.FONT_SMALL, padx=10, justify="left").pack(anchor="w")
 
-        btn_row = tk.Frame(inner, bg=theme.BG_SURFACE0)
-        btn_row.pack(anchor="w")
-
-        self._render_btn = tk.Button(btn_row, text="▶  Ejecutar test de renderizado",
+        self._render_btn = tk.Button(col2d, text="▶  Ejecutar 2D",
                                       command=self._run_render_test,
                                       **theme.BTN_PRIMARY)
-        self._render_btn.pack(side=tk.LEFT, padx=(0, 12))
+        self._render_btn.pack(padx=10, pady=6, anchor="w")
 
-        self._render_lbl = tk.Label(inner, text="",
+        self._render_lbl = tk.Label(col2d, text="",
                                      bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
-                                     font=theme.FONT_BODY)
-        self._render_lbl.pack(anchor="w", pady=(8, 0))
+                                     font=theme.FONT_SMALL, padx=10, justify="left")
+        self._render_lbl.pack(anchor="w", pady=(0, 4))
 
-        # Hidden canvas for benchmark (small, offscreen-ish)
-        self._bench_canvas = tk.Canvas(inner, width=400, height=100,
+        self._bench_canvas = tk.Canvas(col2d, width=1, height=80,
                                         bg=theme.BG_CRUST, highlightthickness=0)
-        self._bench_canvas.pack(fill=tk.X, pady=(8, 0))
+        self._bench_canvas.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        # ── 3D Test ───────────────────────────────────────────────────
+        col3d = tk.Frame(test_cols, bg=theme.BG_SURFACE0,
+                          highlightthickness=1, highlightbackground=theme.BG_SURFACE1)
+        col3d.grid(row=0, column=1, padx=(6, 0), sticky="nsew")
+
+        tk.Label(col3d, text="Test 3D — Cubo wireframe",
+                 bg=theme.BG_SURFACE0, fg=theme.ACCENT_BLUE,
+                 font=theme.FONT_BODY_BOLD, padx=10, pady=6).pack(anchor="w")
+        tk.Label(col3d,
+                 text="Anima un cubo 3D con proyección perspectiva.\nMide FPS durante 5s.",
+                 bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                 font=theme.FONT_SMALL, padx=10, justify="left").pack(anchor="w")
+
+        self._render3d_btn = tk.Button(col3d, text="▶  Ejecutar 3D",
+                                        command=self._run_3d_test,
+                                        **theme.BTN_SECONDARY)
+        self._render3d_btn.pack(padx=10, pady=6, anchor="w")
+
+        self._render3d_lbl = tk.Label(col3d, text="",
+                                       bg=theme.BG_SURFACE0, fg=theme.TEXT_SECONDARY,
+                                       font=theme.FONT_SMALL, padx=10, justify="left")
+        self._render3d_lbl.pack(anchor="w", pady=(0, 4))
+
+        self._canvas3d = tk.Canvas(col3d, width=1, height=180,
+                                    bg="#000010", highlightthickness=0)
+        self._canvas3d.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        self._3d_running = False
 
     def _run_render_test(self):
         self._render_btn.configure(state=tk.DISABLED)
@@ -229,6 +275,101 @@ class Step(BaseStep):
                 self._render_btn.configure(state=tk.NORMAL)
                 self._render_lbl.configure(text=f"Error: {msg}", fg=theme.ERROR)
             self.after(0, err)
+
+    def _run_3d_test(self):
+        if self._3d_running:
+            self._3d_running = False
+            self._render3d_btn.configure(text="▶  Ejecutar 3D")
+            return
+        self._3d_running = True
+        self._render3d_btn.configure(text="■  Detener 3D")
+        self._render3d_lbl.configure(text="⏳ Renderizando cubo 3D...", fg=theme.ACCENT_BLUE)
+        threading.Thread(target=self._do_3d_test, daemon=True).start()
+
+    def _do_3d_test(self):
+        canvas = self._canvas3d
+        start = time.time()
+        deadline = start + 5.0   # 5-second test
+        frames = 0
+        angle = 0.0
+
+        # Unit cube vertices
+        verts = [
+            (-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
+            (-1, -1,  1), (1, -1,  1), (1, 1,  1), (-1, 1,  1),
+        ]
+        # Edges between vertex indices
+        edges = [
+            (0, 1), (1, 2), (2, 3), (3, 0),  # back face
+            (4, 5), (5, 6), (6, 7), (7, 4),  # front face
+            (0, 4), (1, 5), (2, 6), (3, 7),  # connecting edges
+        ]
+        colors = [theme.ACCENT_BLUE, theme.SUCCESS, theme.WARNING,
+                  theme.ERROR, theme.INFO, theme.ACCENT_LAVENDER]
+
+        def project(x, y, z, w, h, fov=5.0, dist=4.0):
+            z_off = z + dist
+            if z_off == 0:
+                z_off = 0.001
+            scale = fov / z_off
+            sx = int(x * scale * (w / 4) + w / 2)
+            sy = int(-y * scale * (h / 4) + h / 2)
+            return sx, sy
+
+        while self._3d_running and time.time() < deadline:
+            t_frame = time.time()
+            angle += 0.03
+
+            cx, sx = math.cos(angle), math.sin(angle)
+            cy, sy_ = math.cos(angle * 0.7), math.sin(angle * 0.7)
+
+            def rot(x, y, z):
+                # Rotate around Y axis
+                x2 = x * cx - z * sx
+                z2 = x * sx + z * cx
+                # Rotate around X axis
+                y2 = y * cy - z2 * sy_
+                z3 = y * sy_ + z2 * cy
+                return x2, y2, z3
+
+            def draw():
+                w = canvas.winfo_width() or 200
+                h = canvas.winfo_height() or 180
+                canvas.delete("all")
+                canvas.create_rectangle(0, 0, w, h, fill="#000010", outline="")
+
+                projected = [project(*rot(*v), w, h) for v in verts]
+
+                for i, (i0, i1) in enumerate(edges):
+                    x0, y0 = projected[i0]
+                    x1, y1 = projected[i1]
+                    col = colors[i % len(colors)]
+                    canvas.create_line(x0, y0, x1, y1, fill=col, width=2)
+
+                # FPS label
+                canvas.create_text(w - 4, 4, text=f"{frames}f", anchor="ne",
+                                   fill=theme.TEXT_MUTED,
+                                   font=(theme.FONT_FAMILY, 7))
+
+            self.after(0, draw)
+            frames += 1
+            elapsed_frame = time.time() - t_frame
+            sleep_time = max(0, 0.016 - elapsed_frame)   # target 60fps
+            time.sleep(sleep_time)
+
+        total_time = time.time() - start
+        measured_fps = frames / total_time if total_time > 0 else 0
+        self._3d_running = False
+
+        def done(fps=measured_fps):
+            self._render3d_btn.configure(text="▶  Ejecutar 3D")
+            ok = fps >= 30
+            color = theme.SUCCESS if ok else theme.WARNING
+            verdict = "✓ 3D OK" if ok else "⚠ 3D lento"
+            self._render3d_lbl.configure(
+                text=f"{verdict} — {fps:.1f} FPS promedio ({frames} frames / {total_time:.1f}s)",
+                fg=color)
+        self.after(0, done)
 
     def _show_error(self, error):
         self._spinner.stop()

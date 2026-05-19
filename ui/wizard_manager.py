@@ -200,36 +200,55 @@ class WizardManager(tk.Frame):
         # Show overlay
         overlay = tk.Toplevel(self)
         overlay.title("⚡ Diagnóstico Automático")
-        overlay.geometry("520x420")
+        overlay.geometry("540x500")
         overlay.configure(bg=theme.BG_BASE)
-        overlay.resizable(False, False)
+        overlay.resizable(False, True)
         overlay.grab_set()
 
         tk.Label(overlay, text="⚡ Diagnóstico Automático",
                  bg=theme.BG_BASE, fg=theme.ACCENT_BLUE,
-                 font=theme.FONT_H2).pack(pady=(20, 4))
+                 font=theme.FONT_H2).pack(pady=(16, 4))
 
         tk.Label(overlay,
                  text="Ejecuta tests automáticos en todos los pasos que no requieren\n"
                       "intervención manual. Los pasos manuales se marcarán como 'Omitido'.",
                  bg=theme.BG_BASE, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_BODY, justify="center").pack(pady=(0, 16))
+                 font=theme.FONT_BODY, justify="center").pack(pady=(0, 10))
 
-        # Step checklist
-        check_frame = tk.Frame(overlay, bg=theme.BG_SURFACE0,
+        # Step checklist — scrollable canvas so the Start button is always visible
+        check_outer = tk.Frame(overlay, bg=theme.BG_SURFACE0,
                                 highlightthickness=1,
-                                highlightbackground=theme.BG_SURFACE1)
-        check_frame.pack(fill=tk.X, padx=24, pady=(0, 12))
+                                highlightbackground=theme.BG_SURFACE1,
+                                height=220)
+        check_outer.pack(fill=tk.X, padx=24, pady=(0, 10))
+        check_outer.pack_propagate(False)
+
+        check_canvas = tk.Canvas(check_outer, bg=theme.BG_SURFACE0,
+                                  highlightthickness=0, bd=0)
+        check_sb = tk.Scrollbar(check_outer, orient="vertical",
+                                 command=check_canvas.yview)
+        check_inner = tk.Frame(check_canvas, bg=theme.BG_SURFACE0)
+        check_inner.bind("<Configure>",
+                         lambda e: check_canvas.configure(
+                             scrollregion=check_canvas.bbox("all")))
+        check_canvas.create_window((0, 0), window=check_inner, anchor="nw")
+        check_canvas.configure(yscrollcommand=check_sb.set)
+        check_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        check_sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _mw_check(e):
+            check_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        check_canvas.bind("<Enter>", lambda e: check_canvas.bind_all("<MouseWheel>", _mw_check))
+        check_canvas.bind("<Leave>", lambda e: check_canvas.unbind_all("<MouseWheel>"))
 
         step_vars = {}
         for step_num, title, _ in self._steps:
             if step_num == 15:
                 continue
             var = tk.BooleanVar(value=step_num in AUTO_STEPS)
-            row = tk.Frame(check_frame, bg=theme.BG_SURFACE0)
+            row = tk.Frame(check_inner, bg=theme.BG_SURFACE0)
             row.pack(fill=tk.X, padx=12, pady=2)
             is_auto = step_num in AUTO_STEPS
-            is_manual = step_num in MANUAL_STEPS
             tag = " (automático)" if is_auto else " (manual — se omitirá)"
             fg = theme.TEXT_PRIMARY if is_auto else theme.TEXT_MUTED
             tk.Checkbutton(row, text=f"{step_num:02d} — {title}{tag}",
@@ -383,10 +402,13 @@ class _Sidebar(tk.Frame):
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        canvas.bind_all(
-            "<MouseWheel>",
-            lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        )
+        def _on_mw(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mw))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        self._list_inner.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mw))
+        self._list_inner.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
         self._canvas = canvas
         self._build_items(statuses, current_idx)

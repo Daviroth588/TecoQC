@@ -197,6 +197,17 @@ class Step(BaseStep):
                 self.set_status(STATUS_FAILED, f"No se pudo abrir cámara {self._camera_idx}")
                 return
 
+            # Request higher resolution (camera will use best available)
+            for res_w, res_h in [(1920, 1080), (1280, 720), (1024, 768)]:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, res_w)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, res_h)
+                got_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                if got_w >= res_w - 10:
+                    break
+
+            # Request maximum FPS
+            cap.set(cv2.CAP_PROP_FPS, 30)
+
             # Read actual resolution from camera
             cam_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             cam_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -226,13 +237,19 @@ class Step(BaseStep):
                 text="Error: Pillow no instalado", fg=theme.ERROR))
             return
 
-        fps_window = []
+        frame_times = []
+        evaluated = False
 
         while self._running and self._cap and self._cap.isOpened():
-            t0 = time.time()
             ret, frame = self._cap.read()
             if not ret:
                 break
+
+            t_now = time.time()
+            frame_times.append(t_now)
+            # Keep 3-second sliding window
+            frame_times = [t for t in frame_times if t_now - t <= 3.0]
+            measured_fps = len(frame_times) / 3.0 if len(frame_times) >= 3 else None
 
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w = frame.shape[:2]
@@ -245,13 +262,11 @@ class Step(BaseStep):
             img = Image.fromarray(frame)
             photo = ImageTk.PhotoImage(img)
 
-            t1 = time.time()
-            fps_window.append(t1)
-            # Keep a 3-second window
-            fps_window = [t for t in fps_window if t1 - t <= 3.0]
-            measured_fps = len(fps_window) / 3.0 if len(fps_window) >= 3 else None
+            _eval = (not evaluated and len(frame_times) >= 20)
+            if _eval:
+                evaluated = True
 
-            def update(p=photo, pw=new_w, ph=new_h, fps=measured_fps):
+            def update(p=photo, fps=measured_fps, do_eval=_eval, ft_len=len(frame_times)):
                 cw = self._canvas.winfo_width()
                 ch = self._canvas.winfo_height()
                 self._canvas.delete("all")
@@ -263,8 +278,7 @@ class Step(BaseStep):
                     self._fps_lbl.configure(
                         text=f"FPS: {fps:.1f} {'✓' if fps_ok else '⚠'}",
                         fg=fps_color)
-                    # Evaluate pass/fail after collecting enough frames
-                    if len(fps_window) >= 15:
+                    if do_eval:
                         cam_w = getattr(self, "_cam_width", 0)
                         cam_h = getattr(self, "_cam_height", 0)
                         res_ok = cam_w >= CAMERA_MIN_WIDTH and cam_h >= CAMERA_MIN_HEIGHT
@@ -286,6 +300,7 @@ class Step(BaseStep):
                             self.set_status(STATUS_FAILED, ", ".join(issues))
 
             self.after(0, update)
+            # Cap UI updates at ~30fps to avoid flooding Tk event loop
             time.sleep(0.033)
 
         self.after(0, lambda: self._status_lbl.configure(

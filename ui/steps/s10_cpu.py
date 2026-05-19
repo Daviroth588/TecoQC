@@ -260,6 +260,7 @@ class Step(BaseStep):
         threading.Thread(target=self._monitor_loop, daemon=True).start()
 
     def _monitor_loop(self):
+        import concurrent.futures
         while self._monitoring:
             try:
                 import psutil
@@ -268,22 +269,27 @@ class Step(BaseStep):
                 freq = psutil.cpu_freq()
                 freq_val = freq.current if freq else 0
 
-                from hardware.cpu import get_cpu_temperature
-                temps = get_cpu_temperature()
+                # Read temperature with a 3-second timeout so slow WMI doesn't block
                 temp_str = "N/D"
                 temp_val = 0.0
-                if temps:
-                    first_temp = list(temps.values())[0]
-                    temp_val = first_temp
-                    temp_str = f"{first_temp:.1f}°C"
-                    if first_temp >= TEMP_CRITICAL:
-                        temp_color = theme.ERROR
-                    elif first_temp >= TEMP_WARNING:
-                        temp_color = theme.WARNING
-                    else:
-                        temp_color = theme.SUCCESS
-                else:
-                    temp_color = theme.TEXT_MUTED
+                temp_color = theme.TEXT_MUTED
+                try:
+                    from hardware.cpu import get_cpu_temperature
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                        fut = ex.submit(get_cpu_temperature)
+                        temps = fut.result(timeout=3)
+                    if temps:
+                        first_temp = list(temps.values())[0]
+                        temp_val = first_temp
+                        temp_str = f"{first_temp:.1f}°C"
+                        if first_temp >= TEMP_CRITICAL:
+                            temp_color = theme.ERROR
+                        elif first_temp >= TEMP_WARNING:
+                            temp_color = theme.WARNING
+                        else:
+                            temp_color = theme.SUCCESS
+                except Exception:
+                    pass
 
                 # Update UI in main thread
                 def update(u=usage, pc=per_core[:], ts=temp_str, tc=temp_color,
@@ -301,8 +307,6 @@ class Step(BaseStep):
                 self.after(0, update)
             except Exception:
                 pass
-
-            time.sleep(1)
 
     def _update_usage_bar(self, usage):
         self._usage_pct_lbl.configure(text=f"{usage:.1f}%")

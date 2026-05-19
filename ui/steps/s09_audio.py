@@ -180,7 +180,12 @@ class Step(BaseStep):
         tk.Button(mic_btn_row, text="🔇 Medir ruido (1s)",
                    command=self._measure_noise, **theme.BTN_NEUTRAL).pack(side=tk.LEFT, padx=(0, 8))
         tk.Button(mic_btn_row, text="🎙 Probar micrófono (3s)",
-                   command=self._test_mic, **theme.BTN_SECONDARY).pack(side=tk.LEFT)
+                   command=self._test_mic, **theme.BTN_SECONDARY).pack(side=tk.LEFT, padx=(0, 8))
+
+        # Playback button — shown after recording exists
+        self._playback_btn = tk.Button(mic_btn_row, text="▶ Reproducir",
+                                        command=self._playback_recording,
+                                        **theme.BTN_NEUTRAL)
 
         self._mic_status_lbl = tk.Label(
             mic_inner, text="● Esperando prueba",
@@ -189,6 +194,7 @@ class Step(BaseStep):
         self._mic_status_lbl.pack(anchor="w", pady=(8, 0))
 
         self._noise_floor = 0.0
+        self._last_recording = None   # numpy array of last mic recording
 
         # Detect audio devices
         self.run_in_thread(self._get_audio_devices, on_done=self._show_audio_devices)
@@ -380,12 +386,14 @@ class Step(BaseStep):
     def _do_test_mic(self):
         recorded = False
         level = 0.0
+        recording_data = None
         try:
             import sounddevice as sd
             import numpy as np
             recording = sd.rec(int(3 * 44100), samplerate=44100, channels=1)
             sd.wait()
             level = float(np.abs(recording).mean()) * 1000
+            recording_data = recording.copy()
             recorded = True
         except ImportError:
             pass
@@ -394,8 +402,9 @@ class Step(BaseStep):
                 text=f"Error de micrófono: {e}", fg=theme.ERROR))
             return
 
-        def update():
+        def update(rec=recording_data):
             if recorded:
+                self._last_recording = rec
                 self._draw_level(min(level * 100, 100))
                 noise = self._noise_floor
                 threshold = max(noise * 3.0, 0.5)
@@ -409,11 +418,28 @@ class Step(BaseStep):
                         text=f"⚠ Nivel bajo: {level:.2f} vs umbral {threshold:.2f} — Hable más fuerte",
                         fg=theme.WARNING)
                     self._evaluate_overall(mic_ok=False)
+                # Show playback button in the button row
+                self._playback_btn.pack(side=tk.LEFT)
             else:
                 self._mic_status_lbl.configure(
                     text="⚠ sounddevice no disponible.\nInstale: pip install sounddevice",
                     fg=theme.WARNING)
         self.after(0, update)
+
+    def _playback_recording(self):
+        if self._last_recording is None:
+            return
+        self._playback_btn.configure(state=tk.DISABLED)
+        def play():
+            try:
+                import sounddevice as sd
+                sd.play(self._last_recording, samplerate=44100)
+                sd.wait()
+            except Exception:
+                pass
+            self.after(0, lambda: self._playback_btn.configure(state=tk.NORMAL))
+        import threading
+        threading.Thread(target=play, daemon=True).start()
 
     def _evaluate_overall(self, mic_ok=None):
         spk = self._spk_confirmed

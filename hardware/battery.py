@@ -105,11 +105,69 @@ def run_battery_report():
     return result
 
 
+def get_battery_health_powercfg():
+    """
+    Extrae capacidad de diseño, capacidad real y ciclos via powercfg /batteryreport /xml.
+    Retorna dict con design_capacity, full_charge_capacity, cycle_count (en mWh).
+    """
+    result = {}
+    try:
+        import tempfile
+        xml_path = os.path.join(tempfile.gettempdir(), "_tecoqc_battery.xml")
+        proc = subprocess.run(
+            ["powercfg", "/batteryreport", "/output", xml_path, "/xml"],
+            capture_output=True, text=True, timeout=20,
+        )
+        if proc.returncode != 0 or not os.path.exists(xml_path):
+            return result
+        import xml.etree.ElementTree as ET
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        ns = {"b": root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""}
+        ns_prefix = f"{{{ns['b']}}}" if ns["b"] else ""
+
+        def find_text(node, tag):
+            el = node.find(f".//{ns_prefix}{tag}")
+            return el.text.strip() if el is not None and el.text else None
+
+        design = find_text(root, "DesignCapacity")
+        full = find_text(root, "FullChargeCapacity")
+        cycles = find_text(root, "CycleCount")
+
+        if design:
+            result["design_capacity"] = int(design)
+        if full:
+            result["full_charge_capacity"] = int(full)
+        if cycles:
+            result["cycle_count"] = int(cycles)
+        if design and full and int(design) > 0:
+            health = round(int(full) / int(design) * 100, 1)
+            result["health_pct"] = health
+            result["wear_level_pct"] = round(100 - health, 1)
+        try:
+            os.remove(xml_path)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return result
+
+
 def get_all_battery_info():
     """Recopila toda la información de batería disponible."""
+    wmi_data = get_battery_wmi()
+
+    # Supplement WMI data with powercfg XML if WMI is missing health info
+    if not wmi_data.get("health_pct"):
+        pcfg = get_battery_health_powercfg()
+        for key in ("design_capacity", "full_charge_capacity", "cycle_count",
+                    "health_pct", "wear_level_pct"):
+            if key in pcfg:
+                wmi_data[key] = pcfg[key]
+
     return {
         "psutil": get_battery_psutil(),
-        "wmi": get_battery_wmi(),
+        "wmi": wmi_data,
     }
 
 

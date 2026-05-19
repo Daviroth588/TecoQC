@@ -316,10 +316,14 @@ class ScrollableFrame(tk.Frame):
         # Resize inner frame when canvas changes width
         canvas.bind("<Configure>", self._on_canvas_resize)
 
-        # Mouse wheel
-        canvas.bind_all("<MouseWheel>",
-                         lambda e: canvas.yview_scroll(
-                             int(-1 * (e.delta / 120)), "units"))
+        # Mouse wheel — solo activo cuando el cursor está sobre el frame
+        def _on_mw(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mw))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        self.inner.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mw))
+        self.inner.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         self._canvas = canvas
 
     def _on_canvas_resize(self, event):

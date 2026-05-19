@@ -302,6 +302,9 @@ class Step(BaseStep):
         self._root().bind("<KeyRelease>", self._on_key_release)
         self._root().bind("<Tab>",        self._on_key_press_tab)
         self._build_legend()
+        # Force focus to root so ALL key events are captured regardless of
+        # which widget is focused inside the step
+        self._root().focus_force()
         try:
             self._install_win_hook()
         except Exception:

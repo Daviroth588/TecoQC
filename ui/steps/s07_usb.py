@@ -66,20 +66,27 @@ class Step(BaseStep):
         )
         self._device_count_lbl.pack(side=tk.RIGHT)
 
-        # ── Infrastructure section (hubs / controllers — always visible) ──
+        # ── Infrastructure section (collapsible) ──
         infra_wrapper = tk.Frame(parent, bg=theme.BG_SURFACE0,
                                   highlightthickness=1,
                                   highlightbackground=theme.BG_SURFACE1)
         infra_wrapper.pack(fill=tk.X, pady=(0, 6))
 
-        infra_header = tk.Frame(infra_wrapper, bg=theme.BG_SURFACE2)
+        self._infra_visible = tk.BooleanVar(value=False)
+
+        infra_header = tk.Frame(infra_wrapper, bg=theme.BG_SURFACE2, cursor="hand2")
         infra_header.pack(fill=tk.X)
-        tk.Label(infra_header, text="Controladores e Infraestructura USB",
-                 bg=theme.BG_SURFACE2, fg=theme.TEXT_SECONDARY,
-                 font=theme.FONT_SMALL, padx=10, pady=5, anchor="w").pack(side=tk.LEFT)
+
+        self._infra_toggle_lbl = tk.Label(
+            infra_header, text="▶ Controladores e Infraestructura USB (click para expandir)",
+            bg=theme.BG_SURFACE2, fg=theme.TEXT_MUTED,
+            font=theme.FONT_SMALL, padx=10, pady=5, anchor="w")
+        self._infra_toggle_lbl.pack(side=tk.LEFT)
+        infra_header.bind("<Button-1>", lambda e: self._toggle_infra())
+        self._infra_toggle_lbl.bind("<Button-1>", lambda e: self._toggle_infra())
 
         self._infra_container = tk.Frame(infra_wrapper, bg=theme.BG_MANTLE)
-        self._infra_container.pack(fill=tk.X)
+        # collapsed by default — only shown after toggle
 
         # ── Connected devices section (PnP USB/HID — hot-plug relevant) ──
         list_wrapper = tk.Frame(parent, bg=theme.BG_SURFACE0,
@@ -121,8 +128,25 @@ class Step(BaseStep):
         self._build_port_slots()
         self._refresh()
 
+    def _toggle_infra(self):
+        if self._infra_visible.get():
+            self._infra_container.pack_forget()
+            self._infra_visible.set(False)
+            self._infra_toggle_lbl.configure(
+                text="▶ Controladores e Infraestructura USB (click para expandir)")
+        else:
+            self._infra_container.pack(fill=tk.X)
+            self._infra_visible.set(True)
+            self._infra_toggle_lbl.configure(
+                text="▼ Controladores e Infraestructura USB (click para colapsar)")
+
     def on_enter(self):
         self._hotplug_active = True
+        # Ensure baseline is captured before hotplug loop starts
+        if not self._baseline_captured:
+            baseline = self._get_device_names()
+            self._last_device_set = baseline
+            self._baseline_captured = True
         threading.Thread(target=self._hotplug_loop, daemon=True).start()
 
     def on_leave(self):
